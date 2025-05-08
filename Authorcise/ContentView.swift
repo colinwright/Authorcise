@@ -1,6 +1,9 @@
 import SwiftUI
 import UniformTypeIdentifiers // Required for TextFile
 
+// Note: The Notification.Name extensions for .settingsWindowOpened and .settingsWindowClosed
+// should now be solely in your AppNotifications.swift file.
+
 // Helper extension to initialize Color from hex string (Keep this)
 extension Color {
     init(hex: String) {
@@ -34,6 +37,7 @@ struct ContentView: View {
     @State private var showPostTimerAlert: Bool = false
     @State private var showStartOverAlert: Bool = false
     @State private var forceViewUpdateForFullscreen: Bool = false
+    @State private var saveStatusMessage: String = "" // For displaying save feedback
 
     // Focus state for the TextEditor
     @FocusState private var editorHasFocus: Bool
@@ -50,14 +54,7 @@ struct ContentView: View {
     @State private var resetButtonHover: Bool = false
 
     // Create an instance of our custom window delegate
-    @State private var windowDelegate = WindowDelegate()
-
-    // Date formatter for filenames
-    private let fileNameDateFormatter: DateFormatter = {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "yyyy-MM-dd_HH-mm-ss"
-        return formatter
-    }()
+    @State private var windowDelegate = WindowDelegate() // Ensure WindowDelegate is defined
 
     // --- Style Constants ---
     private let appBackgroundColorLight = Color(NSColor.textBackgroundColor)
@@ -112,10 +109,8 @@ struct ContentView: View {
             .frame(maxWidth: editorMaxWidth)
             .padding(.horizontal, mainContentHorizontalPadding)
 
-            // Text editor container - Constrained width
             VStack {
                 if isSessionEverStarted {
-                    // Bind TextEditor to appState.userText
                     TextEditor(text: $appState.userText)
                         .font(editorFont)
                         .foregroundColor(primaryTextColor)
@@ -128,7 +123,6 @@ struct ContentView: View {
                         .opacity(isTimerActive ? 1.0 : 0.6)
                         .scrollContentBackground(.hidden)
                         .background(colorScheme == .dark ? appBackgroundColorDark : appBackgroundColorLight)
-
                 } else {
                     Rectangle()
                         .fill(colorScheme == .dark ? appBackgroundColorDark : appBackgroundColorLight)
@@ -139,11 +133,19 @@ struct ContentView: View {
             }
             .frame(maxWidth: editorMaxWidth)
             .padding(.horizontal, mainContentHorizontalPadding)
+            
+            if !saveStatusMessage.isEmpty {
+                Text(saveStatusMessage)
+                    .font(.caption)
+                    .foregroundColor(secondaryTextColor)
+                    .padding(.horizontal, mainContentHorizontalPadding)
+                    .frame(maxWidth: editorMaxWidth, alignment: .leading)
+                    .onTapGesture {
+                        saveStatusMessage = ""
+                    }
+            }
 
-
-            // Bottom control bar - Also constrained width
             HStack(spacing: 15) {
-                // Main action button
                 Button { handleMainButtonAction() } label: {
                     Text(mainButtonText())
                         .font(.system(size: 13))
@@ -153,9 +155,8 @@ struct ContentView: View {
                 .onHover { mainButtonHover = $0 }
                 .keyboardShortcut(.space, modifiers: [])
 
-                // Save button - Check appState.userText
                 if isSessionEverStarted && !appState.userText.isEmpty {
-                    Button { prepareAndShowFileExporter() } label: {
+                    Button { callSaveTextFile() } label: {
                         Text("Save Work")
                             .font(.system(size: 13))
                             .foregroundColor(saveButtonHover ? controlBarHoverColor : secondaryTextColor)
@@ -167,11 +168,9 @@ struct ContentView: View {
 
                 Spacer()
 
-                // Timer duration picker
                 Menu {
                     ForEach(timerDurations, id: \.self) { duration in
                         Button {
-                            let oldValue = selectedDurationInSeconds
                             selectedDurationInSeconds = duration
                             if !isSessionEverStarted {
                                 timeRemaining = duration
@@ -191,8 +190,6 @@ struct ContentView: View {
                 .disabled(isSessionEverStarted)
                 .opacity(isSessionEverStarted ? 0.4 : 1.0)
 
-
-                // Night Mode Toggle Button
                 Button { toggleAppearance() } label: {
                     Image(systemName: isDarkModeEnabled ? "sun.max.fill" : "moon.fill")
                         .font(.system(size: 14))
@@ -201,7 +198,6 @@ struct ContentView: View {
                 .buttonStyle(.plain)
                 .onHover { appearanceButtonHover = $0 }
 
-                // Fullscreen Toggle Button
                 Button { toggleFullscreen() } label: {
                     Image(systemName: isFullscreen() ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right")
                         .font(.system(size: 14))
@@ -210,7 +206,6 @@ struct ContentView: View {
                 .buttonStyle(.plain)
                 .onHover { fullscreenButtonHover = $0 }
 
-                // Start Over Button
                 Button {
                     if isTimerActive {
                         stopActiveTimer()
@@ -236,19 +231,16 @@ struct ContentView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(colorScheme == .dark ? appBackgroundColorDark : appBackgroundColorLight)
         .edgesIgnoringSafeArea(.all)
-        // Add the WindowAccessor as a background element to set the delegate
         .background(WindowAccessor(delegate: windowDelegate))
-        // Alert for when timer runs out
         .alert("Time's up!", isPresented: $showPostTimerAlert) {
             Button("Keep Writing") { alertActionKeepWritingSamePromptNewTimer() }
-            Button("Save my Work") { prepareAndShowFileExporter() }
+            Button("Save my Work") { callSaveTextFile() }
             Button("New Prompt (Discards Current Text)") { alertActionNewPromptDiscardText() }
             Button("Cancel", role: .cancel) {}
         } message: { Text("Your time is up. What would you like to do next?") }
-        // Alert for starting over
         .alert("Start Over?", isPresented: $showStartOverAlert) {
             Button("Save and Start Over", role: .destructive) {
-                prepareAndShowFileExporter()
+                callSaveTextFile()
                 actionResetApp()
             }
             Button("Discard and Start Over", role: .destructive) {
@@ -257,16 +249,13 @@ struct ContentView: View {
             Button("Cancel", role: .cancel) {}
         } message: { Text("Starting over will end your current writing session. Do you want to save your work first?") }
 
-        // Confirmation Dialog for Quitting (Bound to AppState)
         .confirmationDialog(
              "Quit Authorcise?",
-             isPresented: $appState.showQuitConfirmation, // Triggered by AppState
+             isPresented: $appState.showQuitConfirmation,
              titleVisibility: .visible
         ) {
              Button("Save and Quit", role: .destructive) {
-                 appState.isQuittingAfterSave = true
-                 appState.prepareDocumentForSave()
-                 appState.showFileExporter = true
+                 appState.handleSaveAndQuit()
              }
              Button("Discard and Quit", role: .destructive) {
                  NSApplication.shared.terminate(nil)
@@ -278,39 +267,51 @@ struct ContentView: View {
              Text("You have unsaved changes. Do you want to save before quitting?")
         }
 
-        // File exporter sheet - Now uses AppState properties and handles quit logic
         .fileExporter(
-            isPresented: $appState.showFileExporter, // Bind to AppState
-            document: appState.documentToSave,      // Use document from AppState
+            isPresented: $appState.showFileExporter,
+            document: appState.documentToSave,
             contentType: .plainText,
-            defaultFilename: "Authorcise_\(fileNameDateFormatter.string(from: Date())).txt"
+            // Use helper function to generate filename based on settings
+            // Pass current prompt for potential inclusion
+            defaultFilename: generateFileName(forPrompt: currentPrompt, includeExtension: true) // Add extension for fileExporter
         ) { result in
             let wasQuitting = appState.isQuittingAfterSave
 
             switch result {
-            case .success:
-                print("Successfully saved.")
+            case .success(let url):
+                print("ContentView: .fileExporter saved to: \(url.path)")
                 appState.workSaved()
                 if wasQuitting {
                      NSApplication.shared.terminate(nil)
                 }
             case .failure(let error):
-                print("Save failed: \(error.localizedDescription)")
+                print("ContentView: .fileExporter save failed: \(error.localizedDescription)")
+                let nsError = error as NSError
+                if !(nsError.domain == "AuthorciseApp.SaveOperation" && nsError.code == NSUserCancelledError) &&
+                   !(nsError.domain == NSCocoaErrorDomain && nsError.code == NSUserCancelledError) {
+                    saveStatusMessage = "Save failed: \(error.localizedDescription)"
+                } else {
+                    saveStatusMessage = ""
+                }
                  if wasQuitting {
-                     print("Save failed, cancelling termination.")
+                     print("ContentView: Save via .fileExporter failed, cancelling termination.")
                      appState.cancelQuitAfterSaveAttempt()
                  }
-                 // Optionally show user an error alert here
             }
              if appState.showFileExporter {
                  appState.showFileExporter = false
              }
         }
         .onAppear {
-            // Pass the appState to the delegate when the view appears
             windowDelegate.appState = appState
             if !isSessionEverStarted {
                 timeRemaining = selectedDurationInSeconds
+            }
+            NotificationCenter.default.addObserver(forName: .settingsWindowOpened, object: nil, queue: .main) { _ in
+                if self.isTimerActive {
+                    print("ContentView: Settings window opened, pausing timer.")
+                    self.actionPauseTimer()
+                }
             }
         }
     }
@@ -327,7 +328,6 @@ struct ContentView: View {
         if !isSessionEverStarted { return "Start Writing" }
         if isTimerActive { return "Pause Writing" }
         if timeRemaining > 0 { return "Resume Writing" }
-        // Changed button text
         return "Start New Writing"
     }
 
@@ -340,6 +340,9 @@ struct ContentView: View {
             if timeRemaining > 0 { actionResumeTimer() }
             else { actionStartNewSprintWithNewPrompt() }
         }
+        if !saveStatusMessage.starts(with: "Saved to:") {
+             saveStatusMessage = ""
+        }
     }
 
     func actionStartFirstSession() {
@@ -348,6 +351,7 @@ struct ContentView: View {
         timeRemaining = selectedDurationInSeconds
         startActiveTimer()
         focusEditor()
+        saveStatusMessage = ""
     }
 
     func actionPauseTimer() {
@@ -363,20 +367,20 @@ struct ContentView: View {
     func actionStartNewSprintWithNewPrompt() {
         currentPrompt = Prompts.words.randomElement() ?? "next chapter"
         timeRemaining = selectedDurationInSeconds
-        // appState.userText = "" // Keep text unless user chooses discard option
         startActiveTimer()
         focusEditor()
+        saveStatusMessage = ""
     }
 
-    // Reset function now uses AppState
     func actionResetApp() {
         stopActiveTimer()
         isSessionEverStarted = false
         isTimerActive = false
         currentPrompt = ""
-        appState.userText = "" // Reset text in AppState
+        appState.userText = ""
         timeRemaining = selectedDurationInSeconds
         editorHasFocus = false
+        saveStatusMessage = ""
     }
 
     func startActiveTimer() {
@@ -405,45 +409,161 @@ struct ContentView: View {
         timeRemaining = selectedDurationInSeconds
         startActiveTimer()
         focusEditor()
+        saveStatusMessage = ""
     }
 
     func alertActionNewPromptDiscardText() {
         stopActiveTimer()
         editorHasFocus = false
-        appState.userText = "" // Reset text in AppState
+        appState.userText = ""
         currentPrompt = Prompts.words.randomElement() ?? "fresh start"
         timeRemaining = selectedDurationInSeconds
-        isTimerActive = false
+        saveStatusMessage = ""
     }
+
+    // MARK: - Filename Generation Helper
+    
+    // Updated helper function to correctly handle date/time separation based on order
+    func generateFileName(forPrompt prompt: String, includeExtension: Bool = false) -> String {
+        let defaults = UserDefaults.standard
+        let useDefaultStructure = defaults.object(forKey: UserDefaultKeys.filenameUseDefaultStructure) as? Bool ?? true
+        
+        var nameParts: [String] = []
+        let now = Date()
+        
+        // Sanitize the prompt for use in filename
+        let promptSanitized = prompt.replacingOccurrences(of: "[^a-zA-Z0-9_]", with: "_", options: .regularExpression)
+        let safePrompt = promptSanitized.isEmpty || promptSanitized == "_" ? "Writing" : promptSanitized
+
+        if useDefaultStructure {
+            // Use the fixed default structure
+            let defaultFormatter = DateFormatter()
+            defaultFormatter.dateFormat = "yyyy-MM-dd_HH-mm-ss"
+            nameParts.append("Authorcise")
+            nameParts.append(safePrompt)
+            nameParts.append(defaultFormatter.string(from: now))
+        } else {
+            // Use custom structure based on stored order and toggles
+            
+            // Load component order (provide default if loading fails)
+            let componentOrder: [FilenameComponent]
+            if let data = defaults.data(forKey: UserDefaultKeys.filenameComponentOrder),
+               let decodedOrder = try? JSONDecoder().decode([FilenameComponent].self, from: data) {
+                componentOrder = decodedOrder
+            } else {
+                componentOrder = FilenameComponent.allCases // Default order
+            }
+
+            // Load inclusion toggles and custom prefix string
+            let includePrefix = defaults.object(forKey: UserDefaultKeys.filenameIncludeAuthorcisePrefix) as? Bool ?? true
+            let includePrompt = defaults.object(forKey: UserDefaultKeys.filenameIncludePrompt) as? Bool ?? true
+            let includeDate = defaults.object(forKey: UserDefaultKeys.filenameIncludeDate) as? Bool ?? true
+            let includeTime = defaults.object(forKey: UserDefaultKeys.filenameIncludeTime) as? Bool ?? true
+            let includeCustomPrefix = defaults.object(forKey: UserDefaultKeys.filenameIncludeCustomPrefix) as? Bool ?? false
+            let customPrefixString = defaults.string(forKey: UserDefaultKeys.filenameCustomPrefixString) ?? ""
+            
+            // Sanitize custom prefix
+            let safeCustomPrefix = customPrefixString
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .replacingOccurrences(of: "[^a-zA-Z0-9_-]", with: "", options: .regularExpression)
+
+            // Prepare date and time strings separately based on toggles
+            let dateFormatter = DateFormatter()
+            var dateString = ""
+            if includeDate {
+                dateFormatter.dateFormat = "yyyy-MM-dd"
+                dateString = dateFormatter.string(from: now)
+            }
+
+            let timeFormatter = DateFormatter()
+            var timeString = ""
+            if includeTime {
+                timeFormatter.dateFormat = "HH-mm-ss"
+                timeString = timeFormatter.string(from: now)
+            }
+            
+            // Iterate through the stored order and append parts if included
+            for component in componentOrder {
+                switch component {
+                case .authorcisePrefix:
+                    if includePrefix { nameParts.append("Authorcise") }
+                case .customPrefix:
+                    if includeCustomPrefix && !safeCustomPrefix.isEmpty { nameParts.append(safeCustomPrefix) }
+                case .prompt:
+                    if includePrompt { nameParts.append(safePrompt) }
+                case .date:
+                    // Add date string only if date is included
+                    if includeDate && !dateString.isEmpty {
+                        nameParts.append(dateString)
+                    }
+                case .time:
+                    // Add time string only if time is included
+                    if includeTime && !timeString.isEmpty {
+                        nameParts.append(timeString)
+                    }
+                }
+            }
+        }
+        
+        // Join the parts, ensuring no leading/trailing underscores if parts are missing
+        let baseName = nameParts.filter { !$0.isEmpty }.joined(separator: "_")
+        
+        // Ensure a base name exists even if all components are off
+        let finalBaseName = baseName.isEmpty ? "Authorcise_Save" : baseName
+        
+        // Return filename WITH or WITHOUT extension based on parameter
+        return includeExtension ? finalBaseName + ".txt" : finalBaseName
+    }
+
 
     // MARK: - File Operations
 
-    // Updated to use AppState
-    func prepareAndShowFileExporter() {
+    func callSaveTextFile() {
         if isTimerActive {
             stopActiveTimer()
             editorHasFocus = false
         }
-        // Prepare document in AppState
-        appState.prepareDocumentForSave()
-        // Trigger exporter via AppState
-        appState.showFileExporter = true
-    }
 
+        let contentToSave = appState.userText
+        // Generate filename using the updated helper function (without extension)
+        let fileNameWithoutExtension = generateFileName(forPrompt: currentPrompt, includeExtension: false)
+
+        // Pass the generated name (without extension) to the global save function
+        saveTextFile(content: contentToSave, preferredFileName: fileNameWithoutExtension) { result in
+            DispatchQueue.main.async {
+                switch result {
+                case .success(let path):
+                    print("ContentView: Successfully saved to: \(path)")
+                    self.saveStatusMessage = "Saved to: \(path)"
+                    appState.workSaved()
+                case .failure(let error):
+                    print("ContentView: Save failed: \(error.localizedDescription)")
+                    let nsError = error as NSError
+                    if nsError.domain == "AuthorciseApp.SaveOperation" && nsError.code == NSUserCancelledError {
+                        self.saveStatusMessage = ""
+                    } else if nsError.domain == NSCocoaErrorDomain && nsError.code == NSUserCancelledError {
+                         self.saveStatusMessage = ""
+                    }
+                    else {
+                        self.saveStatusMessage = "Save failed: \(error.localizedDescription)"
+                    }
+                }
+            }
+        }
+    }
+    
     func focusEditor() {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
             self.editorHasFocus = true
         }
     }
 
-    // --- New Feature Actions ---
+    // --- Appearance and Fullscreen Actions ---
 
-    // Simplified toggle function
     func toggleAppearance() {
         isDarkModeEnabled.toggle()
     }
 
-    // Updated toggleFullscreen to trigger view update
     func toggleFullscreen() {
         if let window = NSApp.keyWindow ?? NSApp.windows.first {
             window.toggleFullScreen(nil)
@@ -461,10 +581,10 @@ struct ContentView: View {
 struct ContentView_Previews: PreviewProvider {
     static var previews: some View {
         ContentView()
-            .environmentObject(AppState()) // Provide dummy state for preview
+            .environmentObject(AppState())
             .environment(\.colorScheme, .light)
         ContentView()
-            .environmentObject(AppState()) // Provide dummy state for preview
+            .environmentObject(AppState())
             .environment(\.colorScheme, .dark)
     }
 }
