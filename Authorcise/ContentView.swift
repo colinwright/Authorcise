@@ -34,7 +34,7 @@ struct ContentView: View {
     @State private var timer: Timer?
     @State private var isTimerActive: Bool = false
     @State private var isSessionEverStarted: Bool = false
-    @State private var showPostTimerAlert: Bool = false
+    @State private var showPostTimerAlert: Bool = false // Using .alert
     @State private var showStartOverAlert: Bool = false
     @State private var forceViewUpdateForFullscreen: Bool = false
     @State private var saveStatusMessage: String = "" // For displaying save feedback
@@ -75,170 +75,35 @@ struct ContentView: View {
     private var currentAccentColor: Color { colorScheme == .dark ? accentColorDark : accentColorLight }
     let timerDurations: [Int] = [60, 120, 300, 600, 900, 1800]
 
+    // MARK: - Body and Subviews
+    
+    // Main body now calls computed properties for subviews
     var body: some View {
-        let _ = forceViewUpdateForFullscreen
+        let _ = forceViewUpdateForFullscreen // Still needed for fullscreen toggle refresh
 
         VStack(spacing: 25) {
-            // Top section for prompt and timer
-            HStack(spacing: 4) {
-                if isSessionEverStarted {
-                    Text("Prompt:")
-                        .font(.system(size: 13))
-                        .foregroundColor(secondaryTextColor)
-                    Text(currentPrompt)
-                        .font(.system(size: 13))
-                        .foregroundColor(currentAccentColor)
-                    Text(" / ")
-                        .font(.system(size: 13))
-                        .foregroundColor(secondaryTextColor)
-                    Text("Time:")
-                        .font(.system(size: 13))
-                        .foregroundColor(secondaryTextColor)
-                    Text(formatTime(seconds: timeRemaining))
-                        .font(.system(size: 13))
-                        .foregroundColor(isTimerActive ? currentAccentColor : secondaryTextColor)
-                        .frame(minWidth: 45, alignment: .leading)
-                } else {
-                    Text("Select duration, then click 'Start Writing'.")
-                        .font(.system(size: 13))
-                        .foregroundColor(secondaryTextColor)
-                }
-            }
-            .padding(.top, mainContentVerticalPadding)
-            .frame(minHeight: 30)
-            .frame(maxWidth: editorMaxWidth)
-            .padding(.horizontal, mainContentHorizontalPadding)
-
-            VStack {
-                if isSessionEverStarted {
-                    TextEditor(text: $appState.userText)
-                        .font(editorFont)
-                        .foregroundColor(primaryTextColor)
-                        .lineSpacing(editorLineSpacing)
-                        .padding(.horizontal, textEditorInternalHorizontalPadding)
-                        .padding(.vertical, textEditorInternalVerticalPadding)
-                        .frame(maxHeight: .infinity)
-                        .focused($editorHasFocus)
-                        .disabled(!isTimerActive)
-                        .opacity(isTimerActive ? 1.0 : 0.6)
-                        .scrollContentBackground(.hidden)
-                        .background(colorScheme == .dark ? appBackgroundColorDark : appBackgroundColorLight)
-                } else {
-                    Rectangle()
-                        .fill(colorScheme == .dark ? appBackgroundColorDark : appBackgroundColorLight)
-                        .frame(maxHeight: .infinity)
-                        .padding(.horizontal, textEditorInternalHorizontalPadding)
-                        .padding(.vertical, textEditorInternalVerticalPadding)
-                }
-            }
-            .frame(maxWidth: editorMaxWidth)
-            .padding(.horizontal, mainContentHorizontalPadding)
+            topInfoBar // Extracted subview
+            editorSection // Extracted subview
             
             if !saveStatusMessage.isEmpty {
-                Text(saveStatusMessage)
-                    .font(.caption)
-                    .foregroundColor(secondaryTextColor)
-                    .padding(.horizontal, mainContentHorizontalPadding)
-                    .frame(maxWidth: editorMaxWidth, alignment: .leading)
-                    .onTapGesture {
-                        saveStatusMessage = ""
-                    }
+                saveStatusTextView // Extracted subview
             }
-
-            HStack(spacing: 15) {
-                Button { handleMainButtonAction() } label: {
-                    Text(mainButtonText())
-                        .font(.system(size: 13))
-                        .foregroundColor(mainButtonHover ? controlBarHoverColor : secondaryTextColor)
-                }
-                .buttonStyle(.plain)
-                .onHover { mainButtonHover = $0 }
-                .keyboardShortcut(.space, modifiers: [])
-
-                if isSessionEverStarted && !appState.userText.isEmpty {
-                    Button { callSaveTextFile() } label: {
-                        Text("Save Work")
-                            .font(.system(size: 13))
-                            .foregroundColor(saveButtonHover ? controlBarHoverColor : secondaryTextColor)
-                    }
-                    .buttonStyle(.plain)
-                    .onHover { saveButtonHover = $0 }
-                    .keyboardShortcut("s", modifiers: .command)
-                }
-
-                Spacer()
-
-                Menu {
-                    ForEach(timerDurations, id: \.self) { duration in
-                        Button {
-                            selectedDurationInSeconds = duration
-                            if !isSessionEverStarted {
-                                timeRemaining = duration
-                            }
-                        } label: {
-                            Text("\(formatTime(seconds: duration))\(duration == selectedDurationInSeconds ? " *" : "")")
-                        }
-                    }
-                } label: {
-                     Text(formatTime(seconds: selectedDurationInSeconds))
-                        .font(.system(size: 13))
-                        .foregroundColor(durationMenuHover ? controlBarHoverColor : secondaryTextColor)
-                        .frame(minWidth: 45, alignment: .leading)
-                }
-                .buttonStyle(.plain)
-                .onHover { durationMenuHover = $0 }
-                .disabled(isSessionEverStarted)
-                .opacity(isSessionEverStarted ? 0.4 : 1.0)
-
-                Button { toggleAppearance() } label: {
-                    Image(systemName: isDarkModeEnabled ? "sun.max.fill" : "moon.fill")
-                        .font(.system(size: 14))
-                        .foregroundColor(appearanceButtonHover ? controlBarHoverColor : secondaryTextColor)
-                }
-                .buttonStyle(.plain)
-                .onHover { appearanceButtonHover = $0 }
-
-                Button { toggleFullscreen() } label: {
-                    Image(systemName: isFullscreen() ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right")
-                        .font(.system(size: 14))
-                        .foregroundColor(fullscreenButtonHover ? controlBarHoverColor : secondaryTextColor)
-                }
-                .buttonStyle(.plain)
-                .onHover { fullscreenButtonHover = $0 }
-
-                Button {
-                    if isTimerActive {
-                        stopActiveTimer()
-                        editorHasFocus = false
-                    }
-                    showStartOverAlert = true
-                } label: {
-                    Image(systemName: "arrow.counterclockwise")
-                        .font(.system(size: 14))
-                        .foregroundColor(resetButtonHover ? controlBarHoverColor : secondaryTextColor)
-                }
-                .buttonStyle(.plain)
-                .keyboardShortcut("r", modifiers: .command)
-                .disabled(!isSessionEverStarted)
-                .opacity(!isSessionEverStarted ? 0.4 : 1.0)
-                .onHover { resetButtonHover = $0 }
-
-            }
-            .frame(maxWidth: editorMaxWidth)
-            .padding(.horizontal, mainContentHorizontalPadding)
-            .padding(.bottom, controlBarPaddingBottom)
+            
+            bottomControlBar // Extracted subview
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(colorScheme == .dark ? appBackgroundColorDark : appBackgroundColorLight)
         .edgesIgnoringSafeArea(.all)
         .background(WindowAccessor(delegate: windowDelegate))
+        // Modifiers attached to the main VStack
+        // Using .alert for "Time's up!" with updated labels
         .alert("Time's up!", isPresented: $showPostTimerAlert) {
             Button("Keep Writing") { alertActionKeepWritingSamePromptNewTimer() }
-            Button("Save my Work") { callSaveTextFile() }
-            Button("New Prompt (Discards Current Text)") { alertActionNewPromptDiscardText() }
-            Button("Cancel", role: .cancel) {}
+            Button("Save My Work") { callSaveTextFile() } // Updated Label
+            Button("New Prompt (Don't Save)") { alertActionNewPromptDiscardText() } // Updated Label
+            Button("Cancel", role: .cancel) {} // Original Cancel button
         } message: { Text("Your time is up. What would you like to do next?") }
-        .alert("Start Over?", isPresented: $showStartOverAlert) {
+        .alert("Start Over?", isPresented: $showStartOverAlert) { // Start Over alert
             Button("Save and Start Over", role: .destructive) {
                 callSaveTextFile()
                 actionResetApp()
@@ -248,8 +113,7 @@ struct ContentView: View {
             }
             Button("Cancel", role: .cancel) {}
         } message: { Text("Starting over will end your current writing session. Do you want to save your work first?") }
-
-        .confirmationDialog(
+        .confirmationDialog( // Quit confirmation
              "Quit Authorcise?",
              isPresented: $appState.showQuitConfirmation,
              titleVisibility: .visible
@@ -266,55 +130,177 @@ struct ContentView: View {
         } message: {
              Text("You have unsaved changes. Do you want to save before quitting?")
         }
-
-        .fileExporter(
+        .fileExporter( // File exporter
             isPresented: $appState.showFileExporter,
             document: appState.documentToSave,
             contentType: .plainText,
-            // Use helper function to generate filename based on settings
-            // Pass current prompt for potential inclusion
-            defaultFilename: generateFileName(forPrompt: currentPrompt, includeExtension: true) // Add extension for fileExporter
+            defaultFilename: generateFileName(forPrompt: currentPrompt, includeExtension: true)
         ) { result in
-            let wasQuitting = appState.isQuittingAfterSave
-
-            switch result {
-            case .success(let url):
-                print("ContentView: .fileExporter saved to: \(url.path)")
-                appState.workSaved()
-                if wasQuitting {
-                     NSApplication.shared.terminate(nil)
-                }
-            case .failure(let error):
-                print("ContentView: .fileExporter save failed: \(error.localizedDescription)")
-                let nsError = error as NSError
-                if !(nsError.domain == "AuthorciseApp.SaveOperation" && nsError.code == NSUserCancelledError) &&
-                   !(nsError.domain == NSCocoaErrorDomain && nsError.code == NSUserCancelledError) {
-                    saveStatusMessage = "Save failed: \(error.localizedDescription)"
-                } else {
-                    saveStatusMessage = ""
-                }
-                 if wasQuitting {
-                     print("ContentView: Save via .fileExporter failed, cancelling termination.")
-                     appState.cancelQuitAfterSaveAttempt()
-                 }
-            }
-             if appState.showFileExporter {
-                 appState.showFileExporter = false
-             }
+            handleFileExporterResult(result) // Extracted logic to function
         }
-        .onAppear {
-            windowDelegate.appState = appState
-            if !isSessionEverStarted {
-                timeRemaining = selectedDurationInSeconds
-            }
-            NotificationCenter.default.addObserver(forName: .settingsWindowOpened, object: nil, queue: .main) { _ in
-                if self.isTimerActive {
-                    print("ContentView: Settings window opened, pausing timer.")
-                    self.actionPauseTimer()
-                }
-            }
+        .onAppear { // onAppear logic
+            handleOnAppear() // Extracted logic to function
         }
     }
+
+    // Computed property for the top info bar (Prompt/Time)
+    private var topInfoBar: some View {
+        HStack(spacing: 4) {
+            if isSessionEverStarted {
+                Text("Prompt:")
+                    .font(.system(size: 13))
+                    .foregroundColor(secondaryTextColor)
+                Text(currentPrompt)
+                    .font(.system(size: 13))
+                    .foregroundColor(currentAccentColor)
+                Text(" / ")
+                    .font(.system(size: 13))
+                    .foregroundColor(secondaryTextColor)
+                Text("Time:")
+                    .font(.system(size: 13))
+                    .foregroundColor(secondaryTextColor)
+                Text(formatTime(seconds: timeRemaining))
+                    .font(.system(size: 13))
+                    .foregroundColor(isTimerActive ? currentAccentColor : secondaryTextColor)
+                    .frame(minWidth: 45, alignment: .leading)
+            } else {
+                Text("Select duration, then click 'Start Writing'.")
+                    .font(.system(size: 13))
+                    .foregroundColor(secondaryTextColor)
+            }
+        }
+        .padding(.top, mainContentVerticalPadding)
+        .frame(minHeight: 30)
+        .frame(maxWidth: editorMaxWidth)
+        .padding(.horizontal, mainContentHorizontalPadding)
+    }
+
+    // Computed property for the main TextEditor section
+    private var editorSection: some View {
+        VStack {
+            if isSessionEverStarted {
+                TextEditor(text: $appState.userText)
+                    .font(editorFont)
+                    .foregroundColor(primaryTextColor)
+                    .lineSpacing(editorLineSpacing)
+                    .padding(.horizontal, textEditorInternalHorizontalPadding)
+                    .padding(.vertical, textEditorInternalVerticalPadding)
+                    .frame(maxHeight: .infinity)
+                    .focused($editorHasFocus)
+                    .disabled(!isTimerActive)
+                    .opacity(isTimerActive ? 1.0 : 0.6)
+                    .scrollContentBackground(.hidden)
+                    .background(colorScheme == .dark ? appBackgroundColorDark : appBackgroundColorLight)
+            } else {
+                Rectangle()
+                    .fill(colorScheme == .dark ? appBackgroundColorDark : appBackgroundColorLight)
+                    .frame(maxHeight: .infinity)
+                    .padding(.horizontal, textEditorInternalHorizontalPadding)
+                    .padding(.vertical, textEditorInternalVerticalPadding)
+            }
+        }
+        .frame(maxWidth: editorMaxWidth)
+        .padding(.horizontal, mainContentHorizontalPadding)
+    }
+    
+    // Computed property for the save status message text
+    private var saveStatusTextView: some View {
+         Text(saveStatusMessage)
+            .font(.caption)
+            .foregroundColor(secondaryTextColor)
+            .padding(.horizontal, mainContentHorizontalPadding)
+            .frame(maxWidth: editorMaxWidth, alignment: .leading)
+            .onTapGesture {
+                saveStatusMessage = ""
+            }
+    }
+
+    // Computed property for the bottom control bar
+    private var bottomControlBar: some View {
+        HStack(spacing: 15) {
+            Button { handleMainButtonAction() } label: {
+                Text(mainButtonText())
+                    .font(.system(size: 13))
+                    .foregroundColor(mainButtonHover ? controlBarHoverColor : secondaryTextColor)
+            }
+            .buttonStyle(.plain)
+            .onHover { mainButtonHover = $0 }
+            .keyboardShortcut(.space, modifiers: [])
+
+            if isSessionEverStarted && !appState.userText.isEmpty {
+                Button { callSaveTextFile() } label: {
+                    Text("Save Work")
+                        .font(.system(size: 13))
+                        .foregroundColor(saveButtonHover ? controlBarHoverColor : secondaryTextColor)
+                }
+                .buttonStyle(.plain)
+                .onHover { saveButtonHover = $0 }
+                .keyboardShortcut("s", modifiers: .command)
+            }
+
+            Spacer()
+
+            Menu {
+                ForEach(timerDurations, id: \.self) { duration in
+                    Button {
+                        selectedDurationInSeconds = duration
+                        if !isSessionEverStarted {
+                            timeRemaining = duration
+                        }
+                    } label: {
+                        Text("\(formatTime(seconds: duration))\(duration == selectedDurationInSeconds ? " *" : "")")
+                    }
+                }
+            } label: {
+                 Text(formatTime(seconds: selectedDurationInSeconds))
+                    .font(.system(size: 13))
+                    .foregroundColor(durationMenuHover ? controlBarHoverColor : secondaryTextColor)
+                    .frame(minWidth: 45, alignment: .leading)
+            }
+            .buttonStyle(.plain)
+            .onHover { durationMenuHover = $0 }
+            .disabled(isSessionEverStarted)
+            .opacity(isSessionEverStarted ? 0.4 : 1.0)
+
+            Button { toggleAppearance() } label: {
+                Image(systemName: isDarkModeEnabled ? "sun.max.fill" : "moon.fill")
+                    .font(.system(size: 14))
+                    .foregroundColor(appearanceButtonHover ? controlBarHoverColor : secondaryTextColor)
+            }
+            .buttonStyle(.plain)
+            .onHover { appearanceButtonHover = $0 }
+
+            Button { toggleFullscreen() } label: {
+                Image(systemName: isFullscreen() ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right")
+                    .font(.system(size: 14))
+                    .foregroundColor(fullscreenButtonHover ? controlBarHoverColor : secondaryTextColor)
+            }
+            .buttonStyle(.plain)
+            .onHover { fullscreenButtonHover = $0 }
+
+            Button {
+                if isTimerActive {
+                    stopActiveTimer()
+                    editorHasFocus = false
+                }
+                showStartOverAlert = true
+            } label: {
+                Image(systemName: "arrow.counterclockwise")
+                    .font(.system(size: 14))
+                    .foregroundColor(resetButtonHover ? controlBarHoverColor : secondaryTextColor)
+            }
+            .buttonStyle(.plain)
+            .keyboardShortcut("r", modifiers: .command)
+            .disabled(!isSessionEverStarted)
+            .opacity(!isSessionEverStarted ? 0.4 : 1.0)
+            .onHover { resetButtonHover = $0 }
+
+        }
+        .frame(maxWidth: editorMaxWidth)
+        .padding(.horizontal, mainContentHorizontalPadding)
+        .padding(.bottom, controlBarPaddingBottom)
+    }
+
 
     // MARK: - Helper Functions & Actions
 
@@ -417,13 +403,13 @@ struct ContentView: View {
         editorHasFocus = false
         appState.userText = ""
         currentPrompt = Prompts.words.randomElement() ?? "fresh start"
-        timeRemaining = selectedDurationInSeconds
+        timeRemaining = selectedDurationInSeconds // Reset timer for potential next session
+        isTimerActive = false
         saveStatusMessage = ""
     }
 
     // MARK: - Filename Generation Helper
     
-    // Updated helper function to correctly handle date/time separation based on order
     func generateFileName(forPrompt prompt: String, includeExtension: Bool = false) -> String {
         let defaults = UserDefaults.standard
         let useDefaultStructure = defaults.object(forKey: UserDefaultKeys.filenameUseDefaultStructure) as? Bool ?? true
@@ -431,30 +417,24 @@ struct ContentView: View {
         var nameParts: [String] = []
         let now = Date()
         
-        // Sanitize the prompt for use in filename
         let promptSanitized = prompt.replacingOccurrences(of: "[^a-zA-Z0-9_]", with: "_", options: .regularExpression)
         let safePrompt = promptSanitized.isEmpty || promptSanitized == "_" ? "Writing" : promptSanitized
 
         if useDefaultStructure {
-            // Use the fixed default structure
             let defaultFormatter = DateFormatter()
             defaultFormatter.dateFormat = "yyyy-MM-dd_HH-mm-ss"
             nameParts.append("Authorcise")
             nameParts.append(safePrompt)
             nameParts.append(defaultFormatter.string(from: now))
         } else {
-            // Use custom structure based on stored order and toggles
-            
-            // Load component order (provide default if loading fails)
             let componentOrder: [FilenameComponent]
             if let data = defaults.data(forKey: UserDefaultKeys.filenameComponentOrder),
                let decodedOrder = try? JSONDecoder().decode([FilenameComponent].self, from: data) {
                 componentOrder = decodedOrder
             } else {
-                componentOrder = FilenameComponent.allCases // Default order
+                componentOrder = FilenameComponent.allCases
             }
 
-            // Load inclusion toggles and custom prefix string
             let includePrefix = defaults.object(forKey: UserDefaultKeys.filenameIncludeAuthorcisePrefix) as? Bool ?? true
             let includePrompt = defaults.object(forKey: UserDefaultKeys.filenameIncludePrompt) as? Bool ?? true
             let includeDate = defaults.object(forKey: UserDefaultKeys.filenameIncludeDate) as? Bool ?? true
@@ -462,12 +442,10 @@ struct ContentView: View {
             let includeCustomPrefix = defaults.object(forKey: UserDefaultKeys.filenameIncludeCustomPrefix) as? Bool ?? false
             let customPrefixString = defaults.string(forKey: UserDefaultKeys.filenameCustomPrefixString) ?? ""
             
-            // Sanitize custom prefix
             let safeCustomPrefix = customPrefixString
                 .trimmingCharacters(in: .whitespacesAndNewlines)
                 .replacingOccurrences(of: "[^a-zA-Z0-9_-]", with: "", options: .regularExpression)
 
-            // Prepare date and time strings separately based on toggles
             let dateFormatter = DateFormatter()
             var dateString = ""
             if includeDate {
@@ -482,7 +460,6 @@ struct ContentView: View {
                 timeString = timeFormatter.string(from: now)
             }
             
-            // Iterate through the stored order and append parts if included
             for component in componentOrder {
                 switch component {
                 case .authorcisePrefix:
@@ -492,12 +469,10 @@ struct ContentView: View {
                 case .prompt:
                     if includePrompt { nameParts.append(safePrompt) }
                 case .date:
-                    // Add date string only if date is included
                     if includeDate && !dateString.isEmpty {
                         nameParts.append(dateString)
                     }
                 case .time:
-                    // Add time string only if time is included
                     if includeTime && !timeString.isEmpty {
                         nameParts.append(timeString)
                     }
@@ -505,13 +480,8 @@ struct ContentView: View {
             }
         }
         
-        // Join the parts, ensuring no leading/trailing underscores if parts are missing
         let baseName = nameParts.filter { !$0.isEmpty }.joined(separator: "_")
-        
-        // Ensure a base name exists even if all components are off
         let finalBaseName = baseName.isEmpty ? "Authorcise_Save" : baseName
-        
-        // Return filename WITH or WITHOUT extension based on parameter
         return includeExtension ? finalBaseName + ".txt" : finalBaseName
     }
 
@@ -550,6 +520,51 @@ struct ContentView: View {
                 }
             }
         }
+    }
+    
+    // Extracted file exporter result handling
+    private func handleFileExporterResult(_ result: Result<URL, Error>) {
+         let wasQuitting = appState.isQuittingAfterSave
+
+            switch result {
+            case .success(let url):
+                print("ContentView: .fileExporter saved to: \(url.path)")
+                appState.workSaved()
+                if wasQuitting {
+                     NSApplication.shared.terminate(nil)
+                }
+            case .failure(let error):
+                print("ContentView: .fileExporter save failed: \(error.localizedDescription)")
+                let nsError = error as NSError
+                if !(nsError.domain == "AuthorciseApp.SaveOperation" && nsError.code == NSUserCancelledError) &&
+                   !(nsError.domain == NSCocoaErrorDomain && nsError.code == NSUserCancelledError) {
+                    saveStatusMessage = "Save failed: \(error.localizedDescription)"
+                } else {
+                    saveStatusMessage = ""
+                }
+                 if wasQuitting {
+                     print("ContentView: Save via .fileExporter failed, cancelling termination.")
+                     appState.cancelQuitAfterSaveAttempt()
+                 }
+            }
+             // Reset the flag in AppState after handling, regardless of outcome
+             if appState.showFileExporter {
+                 appState.showFileExporter = false
+             }
+    }
+    
+    // Extracted onAppear logic
+    private func handleOnAppear() {
+         windowDelegate.appState = appState
+            if !isSessionEverStarted {
+                timeRemaining = selectedDurationInSeconds
+            }
+            NotificationCenter.default.addObserver(forName: .settingsWindowOpened, object: nil, queue: .main) { _ in
+                if self.isTimerActive {
+                    print("ContentView: Settings window opened, pausing timer.")
+                    self.actionPauseTimer()
+                }
+            }
     }
     
     func focusEditor() {
