@@ -8,6 +8,10 @@ enum UserDefaultKeys {
     static let defaultDownloadDirectoryBookmark = "defaultDownloadDirectoryBookmark"
     static let alwaysShowSavePrompt = "alwaysShowSavePrompt"
 
+    // --- Add this new key for Typewriter Mode ---
+    static let typewriterModeEnabled = "typewriterModeEnabled"
+    // --------------------------------------------
+
     // Keys for filename structure components
     static let filenameUseDefaultStructure = "filenameUseDefaultStructure"
     static let filenameIncludeAuthorcisePrefix = "filenameIncludeAuthorcisePrefix"

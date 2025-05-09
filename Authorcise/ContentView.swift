@@ -5,6 +5,7 @@ import UniformTypeIdentifiers // Required for TextFile
 // should now be solely in your AppNotifications.swift file.
 
 // Helper extension to initialize Color from hex string (Keep this)
+// --- ENSURE THIS EXTENSION IS DEFINED ONLY ONCE ---
 extension Color {
     init(hex: String) {
         let hex = hex.trimmingCharacters(in: CharacterSet.alphanumerics.inverted)
@@ -20,53 +21,58 @@ extension Color {
         self.init(.sRGB, red: Double(r) / 255, green: Double(g) / 255, blue: Double(b) / 255, opacity: Double(a) / 255)
     }
 }
+// --- END OF COLOR EXTENSION ---
 
 // The main view of the application.
+// --- ENSURE THIS STRUCT IS DEFINED ONLY ONCE ---
 struct ContentView: View {
     // Environment variables
     @Environment(\.colorScheme) var colorScheme
-    @EnvironmentObject var appState: AppState // Use the shared AppState
+    @EnvironmentObject var appState: AppState
 
-    // Local State variables (View-specific UI state)
+    // Local State variables
     @State private var currentPrompt: String = ""
     @State private var selectedDurationInSeconds: Int = 120
     @State private var timeRemaining: Int = 120
     @State private var timer: Timer?
     @State private var isTimerActive: Bool = false
     @State private var isSessionEverStarted: Bool = false
-    @State private var showPostTimerAlert: Bool = false // Using .alert
+    @State private var showPostTimerAlert: Bool = false
     @State private var showStartOverAlert: Bool = false
     @State private var forceViewUpdateForFullscreen: Bool = false
-    @State private var saveStatusMessage: String = "" // For displaying save feedback
+    @State private var saveStatusMessage: String = ""
 
     // Focus state for the TextEditor
     @FocusState private var editorHasFocus: Bool
 
-    // AppStorage for dark mode state
+    // AppStorage for preferences
     @AppStorage("isDarkModeEnabled") var isDarkModeEnabled: Bool = false
+    @AppStorage(UserDefaultKeys.typewriterModeEnabled) private var typewriterModeEnabled: Bool = false // Default OFF
 
-    // Hover states for minimalist buttons
+    // Hover states
     @State private var mainButtonHover: Bool = false
     @State private var saveButtonHover: Bool = false
     @State private var durationMenuHover: Bool = false
     @State private var appearanceButtonHover: Bool = false
     @State private var fullscreenButtonHover: Bool = false
     @State private var resetButtonHover: Bool = false
+    @State private var typewriterModeButtonHover: Bool = false
 
-    // Create an instance of our custom window delegate
-    @State private var windowDelegate = WindowDelegate() // Ensure WindowDelegate is defined
+    @State private var windowDelegate = WindowDelegate()
 
     // --- Style Constants ---
-    private let appBackgroundColorLight = Color(NSColor.textBackgroundColor)
-    private let appBackgroundColorDark = Color(NSColor.textBackgroundColor)
-    private var primaryTextColor: Color { colorScheme == .dark ? Color(red: 0.95, green: 0.95, blue: 0.95) : Color(NSColor.textColor) }
-    private var secondaryTextColor: Color { colorScheme == .dark ? Color(red: 0.65, green: 0.65, blue: 0.65) : Color(NSColor.secondaryLabelColor) }
-    private var controlBarHoverColor: Color { colorScheme == .dark ? Color.white.opacity(0.8) : Color.black.opacity(0.7) }
-    private let editorFont = Font.custom("Lato-Regular", size: 18)
+    private var appBackgroundColor: Color { colorScheme == .dark ? Color(NSColor.textBackgroundColor) : Color(NSColor.textBackgroundColor) }
+    private var primaryTextColorSwiftUI: Color { colorScheme == .dark ? .white.opacity(0.95) : .black }
+    private var secondaryTextColorSwiftUI: Color { colorScheme == .dark ? .gray.opacity(0.8) : .gray }
+    private var controlBarHoverColorSwiftUI: Color { colorScheme == .dark ? Color.white.opacity(0.8) : Color.black.opacity(0.7) }
+    
+    private let editorFontSwiftUI = Font.custom("Lato-Regular", size: 18)
     private let editorLineSpacing: CGFloat = 9
     private let editorMaxWidth: CGFloat = 750
-    private let textEditorInternalHorizontalPadding: CGFloat = 35
-    private let textEditorInternalVerticalPadding: CGFloat = 25
+    // Padding for the TextEditor content area itself
+    private let textEditorContentHorizontalPadding: CGFloat = 5
+    private let textEditorContentVerticalPadding: CGFloat = 10
+
     private let mainContentHorizontalPadding: CGFloat = 40
     private let mainContentVerticalPadding: CGFloat = 30
     private let controlBarPaddingBottom: CGFloat = 20
@@ -74,36 +80,31 @@ struct ContentView: View {
     private let accentColorDark = Color(hex: "#C1DDF7")
     private var currentAccentColor: Color { colorScheme == .dark ? accentColorDark : accentColorLight }
     let timerDurations: [Int] = [60, 120, 300, 600, 900, 1800]
-
-    // MARK: - Body and Subviews
     
-    // Main body now calls computed properties for subviews
     var body: some View {
-        let _ = forceViewUpdateForFullscreen // Still needed for fullscreen toggle refresh
+        let _ = forceViewUpdateForFullscreen
 
         VStack(spacing: 25) {
-            topInfoBar // Extracted subview
-            editorSection // Extracted subview
+            topInfoBar
+            editorSection
             
             if !saveStatusMessage.isEmpty {
-                saveStatusTextView // Extracted subview
+                saveStatusTextView
             }
             
-            bottomControlBar // Extracted subview
+            bottomControlBar
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(colorScheme == .dark ? appBackgroundColorDark : appBackgroundColorLight)
+        .background(appBackgroundColor)
         .edgesIgnoringSafeArea(.all)
         .background(WindowAccessor(delegate: windowDelegate))
-        // Modifiers attached to the main VStack
-        // Using .alert for "Time's up!" with updated labels
         .alert("Time's up!", isPresented: $showPostTimerAlert) {
             Button("Keep Writing") { alertActionKeepWritingSamePromptNewTimer() }
-            Button("Save My Work") { callSaveTextFile() } // Updated Label
-            Button("New Prompt (Don't Save)") { alertActionNewPromptDiscardText() } // Updated Label
-            Button("Cancel", role: .cancel) {} // Original Cancel button
+            Button("Save My Work") { callSaveTextFile() }
+            Button("New Prompt (Don't Save)") { alertActionNewPromptDiscardText() }
+            Button("Cancel", role: .cancel) {}
         } message: { Text("Your time is up. What would you like to do next?") }
-        .alert("Start Over?", isPresented: $showStartOverAlert) { // Start Over alert
+        .alert("Start Over?", isPresented: $showStartOverAlert) {
             Button("Save and Start Over", role: .destructive) {
                 callSaveTextFile()
                 actionResetApp()
@@ -113,7 +114,7 @@ struct ContentView: View {
             }
             Button("Cancel", role: .cancel) {}
         } message: { Text("Starting over will end your current writing session. Do you want to save your work first?") }
-        .confirmationDialog( // Quit confirmation
+        .confirmationDialog(
              "Quit Authorcise?",
              isPresented: $appState.showQuitConfirmation,
              titleVisibility: .visible
@@ -130,43 +131,42 @@ struct ContentView: View {
         } message: {
              Text("You have unsaved changes. Do you want to save before quitting?")
         }
-        .fileExporter( // File exporter
+        .fileExporter(
             isPresented: $appState.showFileExporter,
             document: appState.documentToSave,
             contentType: .plainText,
             defaultFilename: generateFileName(forPrompt: currentPrompt, includeExtension: true)
         ) { result in
-            handleFileExporterResult(result) // Extracted logic to function
+            handleFileExporterResult(result)
         }
-        .onAppear { // onAppear logic
-            handleOnAppear() // Extracted logic to function
+        .onAppear {
+            handleOnAppear()
         }
     }
 
-    // Computed property for the top info bar (Prompt/Time)
     private var topInfoBar: some View {
         HStack(spacing: 4) {
             if isSessionEverStarted {
                 Text("Prompt:")
                     .font(.system(size: 13))
-                    .foregroundColor(secondaryTextColor)
+                    .foregroundColor(secondaryTextColorSwiftUI)
                 Text(currentPrompt)
                     .font(.system(size: 13))
                     .foregroundColor(currentAccentColor)
                 Text(" / ")
                     .font(.system(size: 13))
-                    .foregroundColor(secondaryTextColor)
+                    .foregroundColor(secondaryTextColorSwiftUI)
                 Text("Time:")
                     .font(.system(size: 13))
-                    .foregroundColor(secondaryTextColor)
+                    .foregroundColor(secondaryTextColorSwiftUI)
                 Text(formatTime(seconds: timeRemaining))
                     .font(.system(size: 13))
-                    .foregroundColor(isTimerActive ? currentAccentColor : secondaryTextColor)
+                    .foregroundColor(isTimerActive ? currentAccentColor : secondaryTextColorSwiftUI)
                     .frame(minWidth: 45, alignment: .leading)
             } else {
-                Text("Select duration, then click 'Start Writing'.")
+                Text("Select duration, then click 'Start Writing'. \(typewriterModeEnabled ? "(Typewriter Mode On)" : "")")
                     .font(.system(size: 13))
-                    .foregroundColor(secondaryTextColor)
+                    .foregroundColor(secondaryTextColorSwiftUI)
             }
         }
         .padding(.top, mainContentVerticalPadding)
@@ -175,39 +175,88 @@ struct ContentView: View {
         .padding(.horizontal, mainContentHorizontalPadding)
     }
 
-    // Computed property for the main TextEditor section
     private var editorSection: some View {
         VStack {
             if isSessionEverStarted {
-                TextEditor(text: $appState.userText)
-                    .font(editorFont)
-                    .foregroundColor(primaryTextColor)
-                    .lineSpacing(editorLineSpacing)
-                    .padding(.horizontal, textEditorInternalHorizontalPadding)
-                    .padding(.vertical, textEditorInternalVerticalPadding)
-                    .frame(maxHeight: .infinity)
-                    .focused($editorHasFocus)
-                    .disabled(!isTimerActive)
-                    .opacity(isTimerActive ? 1.0 : 0.6)
-                    .scrollContentBackground(.hidden)
-                    .background(colorScheme == .dark ? appBackgroundColorDark : appBackgroundColorLight)
+                if typewriterModeEnabled {
+                    GeometryReader { geometry in
+                        ScrollViewReader { scrollProxy in
+                            ScrollView(.vertical, showsIndicators: false) { // Scrollbar explicitly hidden
+                                TextEditor(text: $appState.userText)
+                                    .font(editorFontSwiftUI)
+                                    .foregroundColor(primaryTextColorSwiftUI)
+                                    .lineSpacing(editorLineSpacing)
+                                    // Internal padding for the actual text content
+                                    .padding(.horizontal, textEditorContentHorizontalPadding)
+                                    .padding(.vertical, textEditorContentVerticalPadding)
+                                    // Frame the TextEditor to fill width and apply large vertical padding
+                                    // for the typewriter effect.
+                                    .frame(width: geometry.size.width)
+                                    .padding(.top, geometry.size.height * 0.25) // Eye-level offset
+                                    .padding(.bottom, geometry.size.height * 0.70) // Scroll room
+                                    .focused($editorHasFocus)
+                                    .disabled(!isTimerActive)
+                                    .opacity(isTimerActive ? 1.0 : 0.6)
+                                    .background(appBackgroundColor) // Match app background
+                                    .id("paddedTextEditor") // ID for scrolling
+                                    .scrollDisabled(true) // Attempt to disable TextEditor's internal scrolling
+                            }
+                            .onChange(of: appState.userText) {
+                                // --- MODIFICATION: Removed withAnimation for diagnostics ---
+                                print("Typewriter mode: Scrolling paddedTextEditor to bottom (no animation).")
+                                scrollProxy.scrollTo("paddedTextEditor", anchor: .bottom)
+                                // --- END OF MODIFICATION ---
+                            }
+                            .onAppear {
+                                // Initial scroll if there's existing text when mode is activated
+                                if !appState.userText.isEmpty {
+                                    DispatchQueue.main.async {
+                                        scrollProxy.scrollTo("paddedTextEditor", anchor: .bottom)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    // Standard SwiftUI TextEditor (Non-Typewriter Mode)
+                    TextEditor(text: $appState.userText)
+                        .font(editorFontSwiftUI)
+                        .foregroundColor(primaryTextColorSwiftUI)
+                        .lineSpacing(editorLineSpacing)
+                        .padding(.horizontal, textEditorContentHorizontalPadding) // Use consistent padding
+                        .padding(.vertical, textEditorContentVerticalPadding)
+                        .frame(maxHeight: .infinity)
+                        .focused($editorHasFocus)
+                        .disabled(!isTimerActive)
+                        .opacity(isTimerActive ? 1.0 : 0.6)
+                        .scrollContentBackground(.hidden)
+                        .background(appBackgroundColor)
+                }
             } else {
+                // Placeholder view when session hasn't started
                 Rectangle()
-                    .fill(colorScheme == .dark ? appBackgroundColorDark : appBackgroundColorLight)
+                    .fill(appBackgroundColor)
                     .frame(maxHeight: .infinity)
-                    .padding(.horizontal, textEditorInternalHorizontalPadding)
-                    .padding(.vertical, textEditorInternalVerticalPadding)
+                    // Use consistent padding for placeholder area
+                    .padding(.horizontal, mainContentHorizontalPadding + textEditorContentHorizontalPadding)
+                    .padding(.vertical, mainContentVerticalPadding + textEditorContentVerticalPadding)
+                    .overlay(
+                        Text(typewriterModeEnabled ? "Typewriter Mode is ON" : "Typewriter Mode is OFF")
+                            .font(.caption)
+                            .foregroundColor(secondaryTextColorSwiftUI)
+                            .padding(.bottom, 20),
+                        alignment: .bottom
+                    )
             }
         }
         .frame(maxWidth: editorMaxWidth)
         .padding(.horizontal, mainContentHorizontalPadding)
     }
     
-    // Computed property for the save status message text
     private var saveStatusTextView: some View {
          Text(saveStatusMessage)
             .font(.caption)
-            .foregroundColor(secondaryTextColor)
+            .foregroundColor(secondaryTextColorSwiftUI)
             .padding(.horizontal, mainContentHorizontalPadding)
             .frame(maxWidth: editorMaxWidth, alignment: .leading)
             .onTapGesture {
@@ -215,13 +264,12 @@ struct ContentView: View {
             }
     }
 
-    // Computed property for the bottom control bar
     private var bottomControlBar: some View {
         HStack(spacing: 15) {
             Button { handleMainButtonAction() } label: {
                 Text(mainButtonText())
                     .font(.system(size: 13))
-                    .foregroundColor(mainButtonHover ? controlBarHoverColor : secondaryTextColor)
+                    .foregroundColor(mainButtonHover ? controlBarHoverColorSwiftUI : secondaryTextColorSwiftUI)
             }
             .buttonStyle(.plain)
             .onHover { mainButtonHover = $0 }
@@ -231,7 +279,7 @@ struct ContentView: View {
                 Button { callSaveTextFile() } label: {
                     Text("Save Work")
                         .font(.system(size: 13))
-                        .foregroundColor(saveButtonHover ? controlBarHoverColor : secondaryTextColor)
+                        .foregroundColor(saveButtonHover ? controlBarHoverColorSwiftUI : secondaryTextColorSwiftUI)
                 }
                 .buttonStyle(.plain)
                 .onHover { saveButtonHover = $0 }
@@ -254,7 +302,7 @@ struct ContentView: View {
             } label: {
                  Text(formatTime(seconds: selectedDurationInSeconds))
                     .font(.system(size: 13))
-                    .foregroundColor(durationMenuHover ? controlBarHoverColor : secondaryTextColor)
+                    .foregroundColor(durationMenuHover ? controlBarHoverColorSwiftUI : secondaryTextColorSwiftUI)
                     .frame(minWidth: 45, alignment: .leading)
             }
             .buttonStyle(.plain)
@@ -262,10 +310,25 @@ struct ContentView: View {
             .disabled(isSessionEverStarted)
             .opacity(isSessionEverStarted ? 0.4 : 1.0)
 
+            Button {
+                typewriterModeEnabled.toggle()
+                if !saveStatusMessage.starts(with: "Saved to:") {
+                     saveStatusMessage = ""
+                }
+            } label: {
+                Image(systemName: typewriterModeEnabled ? "character.cursor.ibeam" : "text.aligncenter")
+                    .font(.system(size: 14))
+                    .foregroundColor(typewriterModeButtonHover ? controlBarHoverColorSwiftUI : secondaryTextColorSwiftUI)
+            }
+            .buttonStyle(.plain)
+            .onHover { typewriterModeButtonHover = $0 }
+            .disabled(isSessionEverStarted)
+            .opacity(isSessionEverStarted ? 0.4 : 1.0)
+
             Button { toggleAppearance() } label: {
                 Image(systemName: isDarkModeEnabled ? "sun.max.fill" : "moon.fill")
                     .font(.system(size: 14))
-                    .foregroundColor(appearanceButtonHover ? controlBarHoverColor : secondaryTextColor)
+                    .foregroundColor(appearanceButtonHover ? controlBarHoverColorSwiftUI : secondaryTextColorSwiftUI)
             }
             .buttonStyle(.plain)
             .onHover { appearanceButtonHover = $0 }
@@ -273,7 +336,7 @@ struct ContentView: View {
             Button { toggleFullscreen() } label: {
                 Image(systemName: isFullscreen() ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right")
                     .font(.system(size: 14))
-                    .foregroundColor(fullscreenButtonHover ? controlBarHoverColor : secondaryTextColor)
+                    .foregroundColor(fullscreenButtonHover ? controlBarHoverColorSwiftUI : secondaryTextColorSwiftUI)
             }
             .buttonStyle(.plain)
             .onHover { fullscreenButtonHover = $0 }
@@ -281,13 +344,12 @@ struct ContentView: View {
             Button {
                 if isTimerActive {
                     stopActiveTimer()
-                    editorHasFocus = false
                 }
                 showStartOverAlert = true
             } label: {
                 Image(systemName: "arrow.counterclockwise")
                     .font(.system(size: 14))
-                    .foregroundColor(resetButtonHover ? controlBarHoverColor : secondaryTextColor)
+                    .foregroundColor(resetButtonHover ? controlBarHoverColorSwiftUI : secondaryTextColorSwiftUI)
             }
             .buttonStyle(.plain)
             .keyboardShortcut("r", modifiers: .command)
@@ -300,9 +362,6 @@ struct ContentView: View {
         .padding(.horizontal, mainContentHorizontalPadding)
         .padding(.bottom, controlBarPaddingBottom)
     }
-
-
-    // MARK: - Helper Functions & Actions
 
     func formatTime(seconds: Int) -> String {
         let minutes = seconds / 60
@@ -336,48 +395,53 @@ struct ContentView: View {
         currentPrompt = Prompts.words.randomElement() ?? "inspiration"
         timeRemaining = selectedDurationInSeconds
         startActiveTimer()
-        focusEditor()
         saveStatusMessage = ""
     }
 
     func actionPauseTimer() {
         stopActiveTimer()
-        editorHasFocus = false
     }
 
     func actionResumeTimer() {
         startActiveTimer()
-        focusEditor()
     }
 
     func actionStartNewSprintWithNewPrompt() {
         currentPrompt = Prompts.words.randomElement() ?? "next chapter"
         timeRemaining = selectedDurationInSeconds
+        appState.userText = ""
+        appState.isWorkSaved = true
         startActiveTimer()
-        focusEditor()
         saveStatusMessage = ""
     }
 
     func actionResetApp() {
         stopActiveTimer()
         isSessionEverStarted = false
-        isTimerActive = false
         currentPrompt = ""
         appState.userText = ""
+        appState.isWorkSaved = true
         timeRemaining = selectedDurationInSeconds
-        editorHasFocus = false
         saveStatusMessage = ""
     }
 
     func startActiveTimer() {
         if isTimerActive { return }
+        
         isTimerActive = true
+        print("ContentView: startActiveTimer - isTimerActive set to true.")
+        
+        // Set focus when timer starts
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { // Slight delay for UI to update
+            print("ContentView: startActiveTimer (delayed) - Setting editorHasFocus = true")
+            self.editorHasFocus = true
+        }
+        
         timer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { _ in
             if self.timeRemaining > 0 {
                 self.timeRemaining -= 1
             } else {
                 self.stopActiveTimer()
-                self.editorHasFocus = false
                 self.showPostTimerAlert = true
             }
         }
@@ -386,29 +450,32 @@ struct ContentView: View {
     func stopActiveTimer() {
         timer?.invalidate()
         timer = nil
+        
+        let wasActive = isTimerActive
+        
+        if wasActive {
+            print("ContentView: stopActiveTimer - Setting editorHasFocus = false")
+            self.editorHasFocus = false
+        }
+        
         isTimerActive = false
+        print("ContentView: stopActiveTimer - isTimerActive set to false.")
     }
-
-    // MARK: - Alert Button Actions
 
     func alertActionKeepWritingSamePromptNewTimer() {
         timeRemaining = selectedDurationInSeconds
         startActiveTimer()
-        focusEditor()
         saveStatusMessage = ""
     }
 
     func alertActionNewPromptDiscardText() {
         stopActiveTimer()
-        editorHasFocus = false
         appState.userText = ""
+        appState.isWorkSaved = true
         currentPrompt = Prompts.words.randomElement() ?? "fresh start"
-        timeRemaining = selectedDurationInSeconds // Reset timer for potential next session
-        isTimerActive = false
+        timeRemaining = selectedDurationInSeconds
         saveStatusMessage = ""
     }
-
-    // MARK: - Filename Generation Helper
     
     func generateFileName(forPrompt prompt: String, includeExtension: Bool = false) -> String {
         let defaults = UserDefaults.standard
@@ -436,9 +503,9 @@ struct ContentView: View {
             }
 
             let includePrefix = defaults.object(forKey: UserDefaultKeys.filenameIncludeAuthorcisePrefix) as? Bool ?? true
-            let includePrompt = defaults.object(forKey: UserDefaultKeys.filenameIncludePrompt) as? Bool ?? true
-            let includeDate = defaults.object(forKey: UserDefaultKeys.filenameIncludeDate) as? Bool ?? true
-            let includeTime = defaults.object(forKey: UserDefaultKeys.filenameIncludeTime) as? Bool ?? true
+            let includePromptFlag = defaults.object(forKey: UserDefaultKeys.filenameIncludePrompt) as? Bool ?? true
+            let includeDateFlag = defaults.object(forKey: UserDefaultKeys.filenameIncludeDate) as? Bool ?? true
+            let includeTimeFlag = defaults.object(forKey: UserDefaultKeys.filenameIncludeTime) as? Bool ?? true
             let includeCustomPrefix = defaults.object(forKey: UserDefaultKeys.filenameIncludeCustomPrefix) as? Bool ?? false
             let customPrefixString = defaults.string(forKey: UserDefaultKeys.filenameCustomPrefixString) ?? ""
             
@@ -448,14 +515,14 @@ struct ContentView: View {
 
             let dateFormatter = DateFormatter()
             var dateString = ""
-            if includeDate {
+            if includeDateFlag {
                 dateFormatter.dateFormat = "yyyy-MM-dd"
                 dateString = dateFormatter.string(from: now)
             }
 
             let timeFormatter = DateFormatter()
             var timeString = ""
-            if includeTime {
+            if includeTimeFlag {
                 timeFormatter.dateFormat = "HH-mm-ss"
                 timeString = timeFormatter.string(from: now)
             }
@@ -467,13 +534,13 @@ struct ContentView: View {
                 case .customPrefix:
                     if includeCustomPrefix && !safeCustomPrefix.isEmpty { nameParts.append(safeCustomPrefix) }
                 case .prompt:
-                    if includePrompt { nameParts.append(safePrompt) }
+                    if includePromptFlag { nameParts.append(safePrompt) }
                 case .date:
-                    if includeDate && !dateString.isEmpty {
+                    if includeDateFlag && !dateString.isEmpty {
                         nameParts.append(dateString)
                     }
                 case .time:
-                    if includeTime && !timeString.isEmpty {
+                    if includeTimeFlag && !timeString.isEmpty {
                         nameParts.append(timeString)
                     }
                 }
@@ -485,26 +552,20 @@ struct ContentView: View {
         return includeExtension ? finalBaseName + ".txt" : finalBaseName
     }
 
-
-    // MARK: - File Operations
-
     func callSaveTextFile() {
         if isTimerActive {
-            stopActiveTimer()
-            editorHasFocus = false
+            actionPauseTimer()
         }
 
         let contentToSave = appState.userText
-        // Generate filename using the updated helper function (without extension)
         let fileNameWithoutExtension = generateFileName(forPrompt: currentPrompt, includeExtension: false)
 
-        // Pass the generated name (without extension) to the global save function
         saveTextFile(content: contentToSave, preferredFileName: fileNameWithoutExtension) { result in
             DispatchQueue.main.async {
                 switch result {
                 case .success(let path):
                     print("ContentView: Successfully saved to: \(path)")
-                    self.saveStatusMessage = "Saved to: \(path)"
+                    self.saveStatusMessage = "Saved to: \(path.truncatingPath())"
                     appState.workSaved()
                 case .failure(let error):
                     print("ContentView: Save failed: \(error.localizedDescription)")
@@ -522,7 +583,6 @@ struct ContentView: View {
         }
     }
     
-    // Extracted file exporter result handling
     private func handleFileExporterResult(_ result: Result<URL, Error>) {
          let wasQuitting = appState.isQuittingAfterSave
 
@@ -530,6 +590,7 @@ struct ContentView: View {
             case .success(let url):
                 print("ContentView: .fileExporter saved to: \(url.path)")
                 appState.workSaved()
+                saveStatusMessage = "Saved to: \(url.path.truncatingPath())"
                 if wasQuitting {
                      NSApplication.shared.terminate(nil)
                 }
@@ -543,17 +604,20 @@ struct ContentView: View {
                     saveStatusMessage = ""
                 }
                  if wasQuitting {
-                     print("ContentView: Save via .fileExporter failed, cancelling termination.")
+                     print("ContentView: Save via .fileExporter failed during quit, cancelling termination.")
                      appState.cancelQuitAfterSaveAttempt()
                  }
             }
-             // Reset the flag in AppState after handling, regardless of outcome
              if appState.showFileExporter {
                  appState.showFileExporter = false
              }
+             if wasQuitting && !appState.showFileExporter {
+                if appState.isQuittingAfterSave {
+                    appState.isQuittingAfterSave = false
+                }
+             }
     }
     
-    // Extracted onAppear logic
     private func handleOnAppear() {
          windowDelegate.appState = appState
             if !isSessionEverStarted {
@@ -567,16 +631,9 @@ struct ContentView: View {
             }
     }
     
-    func focusEditor() {
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-            self.editorHasFocus = true
-        }
-    }
-
-    // --- Appearance and Fullscreen Actions ---
-
     func toggleAppearance() {
         isDarkModeEnabled.toggle()
+        if !saveStatusMessage.starts(with: "Saved to:") { saveStatusMessage = "" }
     }
 
     func toggleFullscreen() {
@@ -584,6 +641,7 @@ struct ContentView: View {
             window.toggleFullScreen(nil)
             forceViewUpdateForFullscreen.toggle()
         }
+        if !saveStatusMessage.starts(with: "Saved to:") { saveStatusMessage = "" }
     }
 
     func isFullscreen() -> Bool {
@@ -591,15 +649,51 @@ struct ContentView: View {
         return window.styleMask.contains(.fullScreen)
     }
 }
+// --- END OF CONTENTVIEW STRUCT ---
 
-// Preview provider needs EnvironmentObject
-struct ContentView_Previews: PreviewProvider {
-    static var previews: some View {
-        ContentView()
-            .environmentObject(AppState())
-            .environment(\.colorScheme, .light)
-        ContentView()
-            .environmentObject(AppState())
-            .environment(\.colorScheme, .dark)
+// --- ENSURE THIS EXTENSION IS DEFINED ONLY ONCE (IF NOT ALREADY PART OF ANOTHER FILE) ---
+// Helper extension to truncate file paths for display (moved here for clarity if it was duplicated)
+extension String {
+    func truncatingPath(maxLength: Int = 50) -> String {
+        if self.count > maxLength {
+            return "..." + self.suffix(maxLength - 3)
+        }
+        return self
     }
 }
+// --- END OF STRING EXTENSION ---
+
+// Preview provider needs EnvironmentObject
+// --- ENSURE THIS STRUCT IS DEFINED ONLY ONCE ---
+struct ContentView_Previews: PreviewProvider {
+    static var previews: some View {
+        let appState = AppState()
+
+        ContentView()
+            .environmentObject(appState)
+            .environment(\.colorScheme, .light)
+            .previewDisplayName("Light Mode")
+
+        ContentView()
+            .environmentObject(appState)
+            .environment(\.colorScheme, .dark)
+            .previewDisplayName("Dark Mode")
+
+        ContentView()
+            .environmentObject(appState)
+            .environment(\.colorScheme, .light)
+            .onAppear {
+                UserDefaults.standard.set(true, forKey: UserDefaultKeys.typewriterModeEnabled)
+            }
+            .previewDisplayName("Typewriter ON (Light)")
+        
+        ContentView()
+            .environmentObject(appState)
+            .environment(\.colorScheme, .dark)
+            .onAppear {
+                UserDefaults.standard.set(true, forKey: UserDefaultKeys.typewriterModeEnabled)
+            }
+            .previewDisplayName("Typewriter ON - Session (Dark)")
+    }
+}
+// --- END OF CONTENTVIEW_PREVIEWS STRUCT ---
