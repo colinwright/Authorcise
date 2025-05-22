@@ -1,7 +1,7 @@
 import SwiftUI
 
 // Ensure other necessary files like AppState, SettingsViewHostingController,
-// ContentView, AppDelegate, etc., are correctly defined in your project.
+// ContentView, AppDelegate, AboutView etc., are correctly defined in your project.
 
 @main
 struct AuthorciseApp: App {
@@ -11,6 +11,9 @@ struct AuthorciseApp: App {
     @AppStorage("isDarkModeEnabled") var isDarkModeEnabled: Bool = false
     // Create the shared state object for the entire app
     @StateObject private var appState = AppState() // Ensure AppState.swift is in your project
+
+    // Environment value to open a new window
+    @Environment(\.openWindow) private var openWindow
 
     var body: some Scene {
         WindowGroup {
@@ -22,27 +25,36 @@ struct AuthorciseApp: App {
         .windowStyle(.hiddenTitleBar)
         .defaultSize(width: 750, height: 850)
         .commands {
-            // Add "Settings..." to the main application menu.
-            // Using CommandGroup(after: .appInfo) places it after the "About Authorcise" item.
-            // This is a common placement for settings/preferences.
-            CommandGroup(after: .appInfo) {
+            // CommandGroup for "About Authorcise"
+            // This replaces the default "About" menu item.
+            CommandGroup(replacing: .appInfo) {
+                Button("About Authorcise") {
+                    // Action to open the custom About window
+                    openWindow(id: "about-authorcise")
+                }
+            }
+
+            // CommandGroup for "Settings..."
+            // Using .appSettings placement for the settings/preferences item.
+            CommandGroup(replacing: .appSettings) {
                 Button("Settings...") {
-                    // Action to open the settings window
-                    // Ensure SettingsViewHostingController.swift is in your project and its show() method is accessible
                     SettingsViewHostingController.show()
                 }
-                .keyboardShortcut(",", modifiers: .command) // Standard macOS shortcut for Preferences/Settings
+                .keyboardShortcut(",", modifiers: .command) // Standard shortcut for Preferences/Settings
+            }
+            
+            // CommandGroup for the Divider, placed after the .appSettings group.
+            // This should insert a divider before the "Services" menu.
+            CommandGroup(after: .appSettings) {
+                Divider()
             }
 
             // Your existing command to replace the standard Quit command
             CommandGroup(replacing: .appTermination) {
                 Button("Quit Authorcise") {
-                    // Check app state for unsaved work before deciding how to quit
                     if !appState.isWorkSaved && !appState.userText.isEmpty {
-                        // Trigger the confirmation dialog via AppState
                         appState.requestQuitWithUnsavedChanges()
                     } else {
-                        // No unsaved work, terminate immediately
                         print("Quitting directly (no unsaved changes).")
                         NSApplication.shared.terminate(nil)
                     }
@@ -50,5 +62,13 @@ struct AuthorciseApp: App {
                 .keyboardShortcut("q", modifiers: .command)
             }
         }
+
+        // Define the custom "About" window scene
+        Window("About Authorcise", id: "about-authorcise") {
+            AboutView()
+        }
+        .windowResizability(.contentSize)
+        .defaultPosition(.center)
+        .defaultSize(width: 400, height: 560)
     }
 }

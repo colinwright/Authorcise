@@ -176,7 +176,8 @@ struct SettingsView: View {
 
                 Toggle("Use default structure (Authorcise_Prompt_Date_Time.txt)", isOn: $filenameUseDefaultStructure)
                     .toggleStyle(.checkbox)
-                    .onChange(of: filenameUseDefaultStructure) { oldValue, newValue in
+                    // MODIFIED .onChange for macOS 13 compatibility
+                    .onChange(of: filenameUseDefaultStructure) { newValue in // Or { _ in
                         if newValue {
                             resetToDefaultStructure()
                         }
@@ -350,11 +351,12 @@ struct SettingsView: View {
         filenameIncludeDate = true
         filenameIncludeTime = true
         filenameIncludeCustomPrefix = false
+        // filenameCustomPrefixString remains as is, user might want to keep it
     }
 
     private func resetToDefaultStructure() {
          resetComponentTogglesToDefault()
-         self.componentOrder = FilenameComponent.allCases
+         self.componentOrder = FilenameComponent.allCases // Reset order to default
          saveComponentOrder()
     }
 
@@ -371,10 +373,15 @@ struct SettingsView: View {
         if let url = resolveBookmark(bookmarkData, startAccessing: true) {
             selectedDirectoryDisplayPath = url.path
             print("SettingsView: Loaded and verified saved directory: \(url.path)")
+            // It's important to stop accessing the resource once done with it,
+            // especially if it was only for display/verification.
+            // The actual save operation will re-acquire access.
             url.stopAccessingSecurityScopedResource()
         } else {
             selectedDirectoryDisplayPath = "Could not access previously selected directory. Please choose again."
             print("SettingsView: Failed to resolve or access bookmarked directory.")
+            // Optionally, clear the bad bookmark data
+            // defaultDownloadDirectoryBookmarkData = nil
         }
     }
 
@@ -393,18 +400,22 @@ struct SettingsView: View {
             if result == .OK, let chosenURL = openPanel.url {
                 print("SettingsView: User selected directory URL: \(chosenURL.path)")
                 do {
+                    // Create a security-scoped bookmark.
                     let bookmarkData = try chosenURL.bookmarkData(options: .withSecurityScope, includingResourceValuesForKeys: nil, relativeTo: nil)
                     self.defaultDownloadDirectoryBookmarkData = bookmarkData
-                    self.selectedDirectoryDisplayPath = chosenURL.path
+                    self.selectedDirectoryDisplayPath = chosenURL.path // Update display
                     print("SettingsView: Successfully created and saved security-scoped bookmark.")
 
+                    // Test access immediately after creating the bookmark
                     if chosenURL.startAccessingSecurityScopedResource() {
                         print("SettingsView: Successfully started accessing security-scoped resource for initial verification: \(chosenURL.path)")
-                        chosenURL.stopAccessingSecurityScopedResource()
+                        chosenURL.stopAccessingSecurityScopedResource() // Release after verification
                         print("SettingsView: Stopped accessing security-scoped resource after verification.")
                     } else {
                         print("SettingsView: ERROR - Failed to start accessing security-scoped resource after selection.")
                         self.selectedDirectoryDisplayPath = "Error: Could not secure access to folder."
+                         // Clear the potentially bad bookmark if access fails
+                        self.defaultDownloadDirectoryBookmarkData = nil
                     }
                 } catch {
                     print("SettingsView: ERROR creating or saving bookmark data: \(error.localizedDescription)")
