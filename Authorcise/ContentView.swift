@@ -1,11 +1,13 @@
 import SwiftUI
-import UniformTypeIdentifiers // Required for TextFile
+import UniformTypeIdentifiers
 
-// Note: The Notification.Name extensions for .settingsWindowOpened and .settingsWindowClosed
-// should now be solely in your AppNotifications.swift file.
+// Notification names for session state
+extension Notification.Name {
+    static let writingSessionDidStart = Notification.Name("com.authorcise.writingSessionDidStart")
+    static let writingSessionDidStop = Notification.Name("com.authorcise.writingSessionDidStop")
+}
 
-// Helper extension to initialize Color from hex string (Keep this)
-// --- ENSURE THIS EXTENSION IS DEFINED ONLY ONCE ---
+// Helper extension to initialize Color from hex string
 extension Color {
     init(hex: String) {
         let hex = hex.trimmingCharacters(in: CharacterSet.alphanumerics.inverted)
@@ -21,35 +23,46 @@ extension Color {
         self.init(.sRGB, red: Double(r) / 255, green: Double(g) / 255, blue: Double(b) / 255, opacity: Double(a) / 255)
     }
 }
-// --- END OF COLOR EXTENSION ---
 
-// The main view of the application.
-// --- ENSURE THIS STRUCT IS DEFINED ONLY ONCE ---
 struct ContentView: View {
-    // Environment variables
     @Environment(\.colorScheme) var colorScheme
     @EnvironmentObject var appState: AppState
 
-    // Local State variables
-    @State private var currentPrompt: String = ""
+    @State private var currentPrompt: String = "" {
+        didSet {
+            appState.currentPromptForSaving = currentPrompt
+        }
+    }
     @State private var selectedDurationInSeconds: Int = 120
     @State private var timeRemaining: Int = 120
     @State private var timer: Timer?
     @State private var isTimerActive: Bool = false
-    @State private var isSessionEverStarted: Bool = false
+    @State private var isSessionEverStarted: Bool = false {
+        didSet {
+            if oldValue != isSessionEverStarted {
+                if isSessionEverStarted {
+                    print("ContentView: Posting .writingSessionDidStart & setting AppState.isCurrentSessionActive = true")
+                    NotificationCenter.default.post(name: .writingSessionDidStart, object: nil)
+                    AppState.isCurrentSessionActive = true
+                } else {
+                    print("ContentView: Posting .writingSessionDidStop & setting AppState.isCurrentSessionActive = false")
+                    NotificationCenter.default.post(name: .writingSessionDidStop, object: nil)
+                    AppState.isCurrentSessionActive = false
+                }
+            }
+        }
+    }
     @State private var showPostTimerAlert: Bool = false
     @State private var showStartOverAlert: Bool = false
     @State private var forceViewUpdateForFullscreen: Bool = false
     @State private var saveStatusMessage: String = ""
 
-    // Focus state for the TextEditor
     @FocusState private var editorHasFocus: Bool
 
-    // AppStorage for preferences
     @AppStorage("isDarkModeEnabled") var isDarkModeEnabled: Bool = false
-    @AppStorage(UserDefaultKeys.typewriterModeEnabled) private var typewriterModeEnabled: Bool = false // Default OFF [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
+    @AppStorage(UserDefaultKeys.typewriterModeEnabled) private var typewriterModeEnabled: Bool = false
+    @AppStorage(UserDefaultKeys.mandalaModeEnabled) private var mandalaModeEnabled: Bool = false
 
-    // Hover states
     @State private var mainButtonHover: Bool = false
     @State private var saveButtonHover: Bool = false
     @State private var durationMenuHover: Bool = false
@@ -61,633 +74,577 @@ struct ContentView: View {
     @State private var windowDelegate = WindowDelegate()
 
     // --- Style Constants ---
-    private var appBackgroundColor: Color { colorScheme == .dark ? Color(NSColor.textBackgroundColor) : Color(NSColor.textBackgroundColor) } // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-    private var primaryTextColorSwiftUI: Color { colorScheme == .dark ? .white.opacity(0.95) : .black } // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-    private var secondaryTextColorSwiftUI: Color { colorScheme == .dark ? .gray.opacity(0.8) : .gray } // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-    private var controlBarHoverColorSwiftUI: Color { colorScheme == .dark ? Color.white.opacity(0.8) : Color.black.opacity(0.7) } // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
+    private var appBackgroundColor: Color { colorScheme == .dark ? Color(NSColor.textBackgroundColor) : Color(NSColor.textBackgroundColor) }
+    private var primaryTextColorSwiftUI: Color { colorScheme == .dark ? .white.opacity(0.95) : .black }
+    private var secondaryTextColorSwiftUI: Color { colorScheme == .dark ? .gray.opacity(0.8) : .gray }
+    private var controlBarHoverColorSwiftUI: Color { colorScheme == .dark ? Color.white.opacity(0.8) : Color.black.opacity(0.7) }
+    private let mandalaModeColor = Color(hex: "#B22222").opacity(0.85)
     
-    private let editorFontSwiftUI = Font.custom("Lato-Regular", size: 18) // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-    private let editorLineSpacing: CGFloat = 9 // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-    private let editorMaxWidth: CGFloat = 750 // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-    // Padding for the TextEditor content area itself
-    private let textEditorContentHorizontalPadding: CGFloat = 5 // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-    private let textEditorContentVerticalPadding: CGFloat = 10 // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
+    private let editorFontSwiftUI = Font.custom("Lato-Regular", size: 18)
+    private let editorLineSpacing: CGFloat = 9
+    private let editorMaxWidth: CGFloat = 750
+    private let textEditorContentHorizontalPadding: CGFloat = 5
+    private let textEditorContentVerticalPadding: CGFloat = 10
 
-    private let mainContentHorizontalPadding: CGFloat = 40 // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-    private let mainContentVerticalPadding: CGFloat = 30 // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-    private let controlBarPaddingBottom: CGFloat = 20 // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-    private let accentColorLight = Color(hex: "#A1CDF4") // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-    private let accentColorDark = Color(hex: "#C1DDF7") // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-    private var currentAccentColor: Color { colorScheme == .dark ? accentColorDark : accentColorLight } // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-    let timerDurations: [Int] = [60, 120, 300, 600, 900, 1800] // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
+    private let mainContentHorizontalPadding: CGFloat = 40
+    private let mainContentVerticalPadding: CGFloat = 30
+    private let controlBarPaddingBottom: CGFloat = 20
+    private let accentColorLight = Color(hex: "#A1CDF4")
+    private let accentColorDark = Color(hex: "#C1DDF7")
+    private var currentAccentColor: Color { colorScheme == .dark ? accentColorDark : accentColorLight }
+    let timerDurations: [Int] = [60, 120, 300, 600, 900, 1800]
     
     var body: some View {
-        let _ = forceViewUpdateForFullscreen // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
+        let _ = forceViewUpdateForFullscreen
 
-        VStack(spacing: 25) { // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-            topInfoBar // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-            editorSection // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
+        VStack(spacing: 0) {
+            topInfoBar
+                .padding(.bottom, 25) // << --- INCREASED PADDING HERE from 15 to 25
+
+            editorSection
+
+            modeStatusFooter
+                .padding(.bottom, 8)
             
-            if !saveStatusMessage.isEmpty { // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-                saveStatusTextView // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-            }
+            statusMessageArea
+                .padding(.bottom, 8)
             
-            bottomControlBar // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
+            bottomControlBar
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity) // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-        .background(appBackgroundColor) // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-        .edgesIgnoringSafeArea(.all) // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-        .background(WindowAccessor(delegate: windowDelegate)) // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-        .alert("Time's up!", isPresented: $showPostTimerAlert) { // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-            Button("Keep Writing") { alertActionKeepWritingSamePromptNewTimer() } // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-            Button("Save My Work") { callSaveTextFile() } // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-            Button("New Prompt (Don't Save)") { alertActionNewPromptDiscardText() } // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-            Button("Cancel", role: .cancel) {} // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-        } message: { Text("Your time is up. What would you like to do next?") } // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-        .alert("Start Over?", isPresented: $showStartOverAlert) { // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-            Button("Save and Start Over", role: .destructive) { // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-                callSaveTextFile() // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-                actionResetApp() // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(appBackgroundColor)
+        .edgesIgnoringSafeArea(.all)
+        .background(WindowAccessor(delegate: windowDelegate))
+        .alert("Time's up!", isPresented: $showPostTimerAlert) {
+            Button("Keep Writing (New Timer)") { alertActionKeepWritingSamePromptNewTimer() }
+            if !mandalaModeEnabled {
+                Button("Save My Work") { callAppendToWritingJournalAndContinue() }
             }
-            Button("Discard and Start Over", role: .destructive) { // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-                actionResetApp() // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
+            Button("New Prompt (Don't Save)") { alertActionNewPromptDiscardText() }
+            Button("Cancel", role: .cancel) {}
+        } message: { Text(mandalaModeEnabled ? "Your time is up. Mandala Mode is active (saving disabled)." : "Your time is up. What would you like to do next?") }
+        .alert("Start Over?", isPresented: $showStartOverAlert) {
+            if !mandalaModeEnabled && !appState.userText.isEmpty {
+                Button("Save and Start Over", role: .destructive) {
+                    callAppendToWritingJournalThenReset()
+                }
             }
-            Button("Cancel", role: .cancel) {} // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-        } message: { Text("Starting over will end your current writing session. Do you want to save your work first?") } // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-        .confirmationDialog( // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-             "Quit Authorcise?", // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-             isPresented: $appState.showQuitConfirmation, // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-             titleVisibility: .visible // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
+            Button("Discard and Start Over", role: .destructive) {
+                actionResetApp(clearText: true)
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: { Text(mandalaModeEnabled ? "Starting over will end your current writing session (Mandala Mode active, saving disabled)." : "Starting over will end your current writing session. Do you want to save your work first?") }
+        .confirmationDialog(
+             "Quit Authorcise?",
+             isPresented: $appState.showQuitConfirmation,
+             titleVisibility: .visible
         ) {
-             Button("Save and Quit", role: .destructive) { // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-                 appState.handleSaveAndQuit() // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
+             if !mandalaModeEnabled && !appState.userText.isEmpty {
+                 Button("Save and Quit", role: .destructive) {
+                     appState.handleSaveAndQuit()
+                 }
              }
-             Button("Discard and Quit", role: .destructive) { // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-                 NSApplication.shared.terminate(nil) // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
+             Button("Discard and Quit", role: .destructive) {
+                 NSApplication.shared.terminate(nil)
              }
-             Button("Cancel", role: .cancel) { // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-                 appState.cancelQuitAfterSaveAttempt() // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
+             Button("Cancel", role: .cancel) {
+                 appState.cancelQuitAttempt()
              }
-        } message: { // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-             Text("You have unsaved changes. Do you want to save before quitting?") // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
+        } message: {
+             Text(mandalaModeEnabled && !appState.userText.isEmpty ? "You have unsaved changes. Mandala Mode is active (saving disabled). Quit anyway?" : "You have unsaved changes. Do you want to save before quitting?")
         }
-        .fileExporter( // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-            isPresented: $appState.showFileExporter, // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-            document: appState.documentToSave, // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-            contentType: .plainText, // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-            defaultFilename: generateFileName(forPrompt: currentPrompt, includeExtension: true) // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-        ) { result in
-            handleFileExporterResult(result) // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
+        .onAppear {
+            handleOnAppear()
         }
-        .onAppear { // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-            handleOnAppear() // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
+        .onChange(of: appState.mandalaModeSaveAttemptMessage) { newMessage in
+            if let msg = newMessage {
+                saveStatusMessage = msg
+                appState.mandalaModeSaveAttemptMessage = nil
+            }
         }
     }
 
+    // MARK: - UI Components
+
     private var topInfoBar: some View {
-        HStack(spacing: 4) { // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-            if isSessionEverStarted { // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-                Text("Prompt:") // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-                    .font(.system(size: 13)) // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-                    .foregroundColor(secondaryTextColorSwiftUI) // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-                Text(currentPrompt) // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-                    .font(.system(size: 13)) // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-                    .foregroundColor(currentAccentColor) // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-                Text(" / ") // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-                    .font(.system(size: 13)) // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-                    .foregroundColor(secondaryTextColorSwiftUI) // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-                Text("Time:") // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-                    .font(.system(size: 13)) // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-                    .foregroundColor(secondaryTextColorSwiftUI) // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-                Text(formatTime(seconds: timeRemaining)) // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-                    .font(.system(size: 13)) // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-                    .foregroundColor(isTimerActive ? currentAccentColor : secondaryTextColorSwiftUI) // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-                    .frame(minWidth: 45, alignment: .leading) // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
+        HStack(spacing: 0) {
+            Spacer()
+            if isSessionEverStarted {
+                Text("Prompt:")
+                    .font(.system(size: 13))
+                    .foregroundColor(secondaryTextColorSwiftUI)
+                Text(" \(currentPrompt)")
+                    .font(.system(size: 13))
+                    .foregroundColor(currentAccentColor)
+                
+                Text(" / ")
+                    .font(.system(size: 13))
+                    .foregroundColor(secondaryTextColorSwiftUI)
+                
+                Text("Time:")
+                    .font(.system(size: 13))
+                    .foregroundColor(secondaryTextColorSwiftUI)
+                Text(" \(formatTime(seconds: timeRemaining))")
+                    .font(.system(size: 13))
+                    .foregroundColor(isTimerActive ? currentAccentColor : secondaryTextColorSwiftUI)
+                    .frame(minWidth: 45, alignment: .leading)
             } else {
-                Text("Select duration, then click 'Start Writing'.") // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-                    .font(.system(size: 13)) // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-                    .foregroundColor(secondaryTextColorSwiftUI) // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
+                Text("Select duration, then click 'Start Writing'.")
+                    .font(.system(size: 13))
+                    .foregroundColor(secondaryTextColorSwiftUI)
             }
+            Spacer()
         }
-        .padding(.top, mainContentVerticalPadding) // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-        .frame(minHeight: 30) // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-        .frame(maxWidth: editorMaxWidth) // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-        .padding(.horizontal, mainContentHorizontalPadding) // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
+        .padding(.top, mainContentVerticalPadding)
+        .frame(height: 30)
+        .frame(maxWidth: editorMaxWidth)
+        .padding(.horizontal, mainContentHorizontalPadding)
     }
 
     private var editorSection: some View {
-        VStack { // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-            if isSessionEverStarted { // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-                if typewriterModeEnabled { // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-                    GeometryReader { geometry in // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-                        ScrollViewReader { scrollProxy in // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-                            ScrollView(.vertical, showsIndicators: false) { // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-                                TextEditor(text: $appState.userText) // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-                                    .font(editorFontSwiftUI) // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-                                    .foregroundColor(primaryTextColorSwiftUI) // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-                                    .lineSpacing(editorLineSpacing) // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-                                    .padding(.horizontal, textEditorContentHorizontalPadding) // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-                                    .padding(.vertical, textEditorContentVerticalPadding) // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-                                    .frame(width: geometry.size.width) // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-                                    .padding(.top, geometry.size.height * 0.25) // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-                                    .padding(.bottom, geometry.size.height * 0.70) // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-                                    .focused($editorHasFocus) // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-                                    .disabled(!isTimerActive) // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-                                    .opacity(isTimerActive ? 1.0 : 0.6) // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-                                    .background(appBackgroundColor) // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-                                    .id("paddedTextEditor") // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-                                    .scrollDisabled(true) // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
+        VStack {
+            if isSessionEverStarted {
+                if typewriterModeEnabled {
+                    GeometryReader { geometry in
+                        ScrollViewReader { scrollProxy in
+                            ScrollView(.vertical, showsIndicators: false) {
+                                TextEditor(text: $appState.userText)
+                                    .font(editorFontSwiftUI)
+                                    .foregroundColor(primaryTextColorSwiftUI)
+                                    .lineSpacing(editorLineSpacing)
+                                    .padding(.horizontal, textEditorContentHorizontalPadding)
+                                    .padding(.vertical, textEditorContentVerticalPadding)
+                                    .frame(width: geometry.size.width)
+                                    .padding(.top, geometry.size.height * 0.25)
+                                    .padding(.bottom, geometry.size.height * 0.70)
+                                    .focused($editorHasFocus)
+                                    .disabled(!isTimerActive)
+                                    .opacity(isTimerActive ? 1.0 : 0.6)
+                                    .background(appBackgroundColor)
+                                    .id("paddedTextEditor")
+                                    .scrollDisabled(true)
                             }
-                            // MODIFIED .onChange to ensure macOS 13 compatibility
-                            .onChange(of: appState.userText) { _ in // Use `_ in` or `newText in`
-                                print("Typewriter mode: Scrolling paddedTextEditor to bottom (onChange).") // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-                                scrollProxy.scrollTo("paddedTextEditor", anchor: .bottom) // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
+                            .onChange(of: appState.userText) { _ in
+                                scrollProxy.scrollTo("paddedTextEditor", anchor: .bottom)
                             }
-                            .onAppear { // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-                                if !appState.userText.isEmpty { // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-                                    DispatchQueue.main.async { // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-                                        print("Typewriter mode: Scrolling paddedTextEditor to bottom (onAppear).")
-                                        scrollProxy.scrollTo("paddedTextEditor", anchor: .bottom) // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
+                            .onAppear {
+                                if !appState.userText.isEmpty {
+                                    DispatchQueue.main.async {
+                                        scrollProxy.scrollTo("paddedTextEditor", anchor: .bottom)
                                     }
                                 }
                             }
                         }
                     }
                 } else {
-                    // Standard SwiftUI TextEditor (Non-Typewriter Mode)
-                    TextEditor(text: $appState.userText) // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-                        .font(editorFontSwiftUI) // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-                        .foregroundColor(primaryTextColorSwiftUI) // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-                        .lineSpacing(editorLineSpacing) // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-                        .padding(.horizontal, textEditorContentHorizontalPadding) // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-                        .padding(.vertical, textEditorContentVerticalPadding) // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-                        .frame(maxHeight: .infinity) // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-                        .focused($editorHasFocus) // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-                        .disabled(!isTimerActive) // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-                        .opacity(isTimerActive ? 1.0 : 0.6) // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-                        .scrollContentBackground(.hidden) // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-                        .background(appBackgroundColor) // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
+                    TextEditor(text: $appState.userText)
+                        .font(editorFontSwiftUI)
+                        .foregroundColor(primaryTextColorSwiftUI)
+                        .lineSpacing(editorLineSpacing)
+                        .padding(.horizontal, textEditorContentHorizontalPadding)
+                        .padding(.vertical, textEditorContentVerticalPadding)
+                        .frame(maxHeight: .infinity)
+                        .focused($editorHasFocus)
+                        .disabled(!isTimerActive)
+                        .opacity(isTimerActive ? 1.0 : 0.6)
+                        .scrollContentBackground(.hidden)
+                        .background(appBackgroundColor)
                 }
             } else {
-                // Placeholder view when session hasn't started
-                Rectangle() // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-                    .fill(appBackgroundColor) // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-                    .frame(maxHeight: .infinity) // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-                    .padding(.horizontal, mainContentHorizontalPadding + textEditorContentHorizontalPadding) // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-                    .padding(.vertical, mainContentVerticalPadding + textEditorContentVerticalPadding) // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-                    .overlay( // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-                        Text(typewriterModeEnabled ? "Typewriter Mode is ON" : "Typewriter Mode is OFF") // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-                            .font(.caption) // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-                            .foregroundColor(secondaryTextColorSwiftUI) // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-                            .padding(.bottom, 20), // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-                        alignment: .bottom // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-                    )
+                Rectangle()
+                    .fill(Color.clear)
+                    .frame(maxHeight: .infinity)
             }
         }
-        .frame(maxWidth: editorMaxWidth) // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-        .padding(.horizontal, mainContentHorizontalPadding) // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
+        .frame(maxWidth: editorMaxWidth)
+        .padding(.horizontal, mainContentHorizontalPadding)
     }
     
-    private var saveStatusTextView: some View {
-         Text(saveStatusMessage) // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-            .font(.caption) // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-            .foregroundColor(secondaryTextColorSwiftUI) // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-            .padding(.horizontal, mainContentHorizontalPadding) // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-            .frame(maxWidth: editorMaxWidth, alignment: .leading) // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-            .onTapGesture { // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-                saveStatusMessage = "" // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
+    private var modeStatusFooter: some View {
+        HStack(spacing: 10) {
+            Spacer()
+            
+            Text("Typewriter Mode: \(typewriterModeEnabled ? "ON" : "OFF")")
+                .font(.caption)
+                .foregroundColor(secondaryTextColorSwiftUI)
+            
+            Text("|")
+                .font(.caption)
+                .foregroundColor(secondaryTextColorSwiftUI.opacity(0.5))
+            
+            Text("Mandala Mode: \(mandalaModeEnabled ? (isSessionEverStarted ? "ON (Saving Disabled)" : "ON") : "OFF")")
+                .font(.caption)
+                .foregroundColor(mandalaModeEnabled ? mandalaModeColor : secondaryTextColorSwiftUI)
+            
+            Spacer()
+        }
+        .frame(maxWidth: editorMaxWidth)
+        .padding(.horizontal, mainContentHorizontalPadding)
+        .frame(height: 20)
+    }
+    
+    private var statusMessageArea: some View {
+        VStack(alignment: .leading) {
+            Text(saveStatusMessage)
+                .font(.caption)
+                .foregroundColor(saveStatusMessage.contains("Mandala Mode") ? mandalaModeColor : (saveStatusMessage.contains("failed") || saveStatusMessage.contains("cancelled") ? .red : secondaryTextColorSwiftUI))
+                .opacity(saveStatusMessage.isEmpty ? 0 : 1)
+        }
+        .padding(.horizontal, mainContentHorizontalPadding)
+        .frame(maxWidth: editorMaxWidth, minHeight: 20, alignment: .leading)
+        .onTapGesture {
+            saveStatusMessage = ""
+        }
+        .onAppear {
+            if !saveStatusMessage.isEmpty {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 7) {
+                    if !saveStatusMessage.isEmpty {
+                       saveStatusMessage = ""
+                    }
+                }
             }
+        }
+        .onChange(of: saveStatusMessage) { newValue in
+            if !newValue.isEmpty {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 7) {
+                     if saveStatusMessage == newValue {
+                        saveStatusMessage = ""
+                     }
+                }
+            }
+        }
     }
 
     private var bottomControlBar: some View {
-        HStack(spacing: 15) { // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-            Button { handleMainButtonAction() } label: { // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-                Text(mainButtonText()) // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-                    .font(.system(size: 13)) // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-                    .foregroundColor(mainButtonHover ? controlBarHoverColorSwiftUI : secondaryTextColorSwiftUI) // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
+        HStack(spacing: 15) {
+            Button { handleMainButtonAction() } label: {
+                Text(mainButtonText())
+                    .font(.system(size: 13))
+                    .foregroundColor(mainButtonHover ? controlBarHoverColorSwiftUI : secondaryTextColorSwiftUI)
             }
-            .buttonStyle(.plain) // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-            .onHover { mainButtonHover = $0 } // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-            .keyboardShortcut(.space, modifiers: []) // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
+            .buttonStyle(.plain)
+            .onHover { mainButtonHover = $0 }
+            .keyboardShortcut(.space, modifiers: [])
 
-            if isSessionEverStarted && !appState.userText.isEmpty { // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-                Button { callSaveTextFile() } label: { // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-                    Text("Save Work") // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-                        .font(.system(size: 13)) // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-                        .foregroundColor(saveButtonHover ? controlBarHoverColorSwiftUI : secondaryTextColorSwiftUI) // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
+            if isSessionEverStarted && !appState.userText.isEmpty && !mandalaModeEnabled {
+                Button { callAppendToWritingJournalAndContinue() } label: {
+                    Text("Save Work")
+                        .font(.system(size: 13))
+                        .foregroundColor(saveButtonHover ? controlBarHoverColorSwiftUI : secondaryTextColorSwiftUI)
                 }
-                .buttonStyle(.plain) // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-                .onHover { saveButtonHover = $0 } // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-                .keyboardShortcut("s", modifiers: .command) // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
+                .buttonStyle(.plain)
+                .onHover { saveButtonHover = $0 }
+                .keyboardShortcut("s", modifiers: .command)
             }
 
-            Spacer() // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
+            Spacer()
 
-            Menu { // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-                ForEach(timerDurations, id: \.self) { duration in // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-                    Button { // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-                        selectedDurationInSeconds = duration // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-                        if !isSessionEverStarted { // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-                            timeRemaining = duration // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
+            Menu {
+                ForEach(timerDurations, id: \.self) { duration in
+                    Button {
+                        selectedDurationInSeconds = duration
+                        if !isSessionEverStarted {
+                            timeRemaining = duration
                         }
-                    } label: { // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-                        Text("\(formatTime(seconds: duration))\(duration == selectedDurationInSeconds ? " *" : "")") // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
+                    } label: {
+                        Text("\(formatTime(seconds: duration))\(duration == selectedDurationInSeconds ? " ✔" : "")")
                     }
                 }
-            } label: { // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-                 Text(formatTime(seconds: selectedDurationInSeconds)) // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-                    .font(.system(size: 13)) // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-                    .foregroundColor(durationMenuHover ? controlBarHoverColorSwiftUI : secondaryTextColorSwiftUI) // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-                    .frame(minWidth: 45, alignment: .leading) // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
+            } label: {
+                 Text(formatTime(seconds: selectedDurationInSeconds))
+                    .font(.system(size: 13))
+                    .foregroundColor(durationMenuHover ? controlBarHoverColorSwiftUI : secondaryTextColorSwiftUI)
+                    .frame(minWidth: 45, alignment: .leading)
             }
-            .buttonStyle(.plain) // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-            .onHover { durationMenuHover = $0 } // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-            .disabled(isSessionEverStarted) // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-            .opacity(isSessionEverStarted ? 0.4 : 1.0) // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
+            .buttonStyle(.plain)
+            .onHover { durationMenuHover = $0 }
+            .disabled(isSessionEverStarted)
+            .opacity(isSessionEverStarted ? 0.4 : 1.0)
 
-            Button { // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-                typewriterModeEnabled.toggle() // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-                if !saveStatusMessage.starts(with: "Saved to:") { // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-                     saveStatusMessage = "" // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
+            Button {
+                typewriterModeEnabled.toggle()
+                if !saveStatusMessage.starts(with: "Saved to:") && !saveStatusMessage.contains("Mandala") {
+                     saveStatusMessage = ""
                 }
-            } label: { // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-                Image(systemName: typewriterModeEnabled ? "character.cursor.ibeam" : "text.aligncenter") // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-                    .font(.system(size: 14)) // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-                    .foregroundColor(typewriterModeButtonHover ? controlBarHoverColorSwiftUI : secondaryTextColorSwiftUI) // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
+            } label: {
+                Image(systemName: typewriterModeEnabled ? "character.cursor.ibeam" : "text.aligncenter")
+                    .font(.system(size: 14))
+                    .foregroundColor(typewriterModeButtonHover ? controlBarHoverColorSwiftUI : secondaryTextColorSwiftUI)
             }
-            .buttonStyle(.plain) // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-            .onHover { typewriterModeButtonHover = $0 } // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-            .disabled(isSessionEverStarted) // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-            .opacity(isSessionEverStarted ? 0.4 : 1.0) // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
+            .buttonStyle(.plain)
+            .onHover { typewriterModeButtonHover = $0 }
 
-            Button { toggleAppearance() } label: { // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-                Image(systemName: isDarkModeEnabled ? "sun.max.fill" : "moon.fill") // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-                    .font(.system(size: 14)) // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-                    .foregroundColor(appearanceButtonHover ? controlBarHoverColorSwiftUI : secondaryTextColorSwiftUI) // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
+            Button { toggleAppearance() } label: {
+                Image(systemName: isDarkModeEnabled ? "sun.max.fill" : "moon.fill")
+                    .font(.system(size: 14))
+                    .foregroundColor(appearanceButtonHover ? controlBarHoverColorSwiftUI : secondaryTextColorSwiftUI)
             }
-            .buttonStyle(.plain) // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-            .onHover { appearanceButtonHover = $0 } // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
+            .buttonStyle(.plain)
+            .onHover { appearanceButtonHover = $0 }
 
-            Button { toggleFullscreen() } label: { // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-                Image(systemName: isFullscreen() ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right") // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-                    .font(.system(size: 14)) // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-                    .foregroundColor(fullscreenButtonHover ? controlBarHoverColorSwiftUI : secondaryTextColorSwiftUI) // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
+            Button { toggleFullscreen() } label: {
+                Image(systemName: isFullscreen() ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right")
+                    .font(.system(size: 14))
+                    .foregroundColor(fullscreenButtonHover ? controlBarHoverColorSwiftUI : secondaryTextColorSwiftUI)
             }
-            .buttonStyle(.plain) // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-            .onHover { fullscreenButtonHover = $0 } // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
+            .buttonStyle(.plain)
+            .onHover { fullscreenButtonHover = $0 }
 
-            Button { // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-                if isTimerActive { // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-                    stopActiveTimer() // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
+            Button {
+                if isTimerActive {
+                    stopActiveTimer()
                 }
-                showStartOverAlert = true // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-            } label: { // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-                Image(systemName: "arrow.counterclockwise") // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-                    .font(.system(size: 14)) // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-                    .foregroundColor(resetButtonHover ? controlBarHoverColorSwiftUI : secondaryTextColorSwiftUI) // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
+                if !appState.userText.isEmpty || mandalaModeEnabled {
+                    showStartOverAlert = true
+                } else {
+                    actionResetApp(clearText: true)
+                }
+            } label: {
+                Image(systemName: "arrow.counterclockwise")
+                    .font(.system(size: 14))
+                    .foregroundColor(resetButtonHover ? controlBarHoverColorSwiftUI : secondaryTextColorSwiftUI)
             }
-            .buttonStyle(.plain) // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-            .keyboardShortcut("r", modifiers: .command) // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-            .disabled(!isSessionEverStarted) // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-            .opacity(!isSessionEverStarted ? 0.4 : 1.0) // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-            .onHover { resetButtonHover = $0 } // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-
+            .buttonStyle(.plain)
+            .keyboardShortcut("r", modifiers: .command)
+            .disabled(!isSessionEverStarted && appState.userText.isEmpty && !mandalaModeEnabled)
+            .opacity((!isSessionEverStarted && appState.userText.isEmpty && !mandalaModeEnabled) ? 0.4 : 1.0)
+            .onHover { resetButtonHover = $0 }
         }
-        .frame(maxWidth: editorMaxWidth) // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-        .padding(.horizontal, mainContentHorizontalPadding) // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-        .padding(.bottom, controlBarPaddingBottom) // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
+        .frame(maxWidth: editorMaxWidth)
+        .padding(.horizontal, mainContentHorizontalPadding)
+        .padding(.bottom, controlBarPaddingBottom)
     }
 
-    func formatTime(seconds: Int) -> String { // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-        let minutes = seconds / 60 // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-        let remainingSeconds = seconds % 60 // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-        return String(format: "%02d:%02d", minutes, remainingSeconds) // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
+    // MARK: - Helper Functions
+    func formatTime(seconds: Int) -> String {
+        let minutes = seconds / 60
+        let remainingSeconds = seconds % 60
+        return String(format: "%02d:%02d", minutes, remainingSeconds)
     }
 
-    func mainButtonText() -> String { // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-        if !isSessionEverStarted { return "Start Writing" } // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-        if isTimerActive { return "Pause Writing" } // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-        if timeRemaining > 0 { return "Resume Writing" } // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-        return "Start New Writing" // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
+    func mainButtonText() -> String {
+        if !isSessionEverStarted { return "Start Writing" }
+        if isTimerActive { return "Pause Writing" }
+        if timeRemaining > 0 { return "Resume Writing" }
+        return "Start New Writing"
     }
 
-    func handleMainButtonAction() { // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-        if !isSessionEverStarted { // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-            actionStartFirstSession() // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-        } else if isTimerActive { // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-            actionPauseTimer() // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-        } else { // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-            if timeRemaining > 0 { actionResumeTimer() } // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-            else { actionStartNewSprintWithNewPrompt() } // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
+    func isFullscreen() -> Bool {
+        guard let window = NSApp.keyWindow ?? NSApp.windows.first else { return false }
+        return window.styleMask.contains(.fullScreen)
+    }
+
+    // MARK: - Action Handlers
+    func handleMainButtonAction() {
+        if !isSessionEverStarted {
+            actionStartFirstSession()
+        } else if isTimerActive {
+            actionPauseTimer()
+        } else {
+            if timeRemaining > 0 { actionResumeTimer() }
+            else { actionStartNewSprintWithNewPrompt(clearExistingText: true) }
         }
-        if !saveStatusMessage.starts(with: "Saved to:") { // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-             saveStatusMessage = "" // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
+        if !saveStatusMessage.starts(with: "Saved to:") && !saveStatusMessage.contains("Mandala") {
+             saveStatusMessage = ""
         }
     }
 
-    func actionStartFirstSession() { // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-        isSessionEverStarted = true // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-        currentPrompt = Prompts.words.randomElement() ?? "inspiration" // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-        timeRemaining = selectedDurationInSeconds // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-        startActiveTimer() // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-        saveStatusMessage = "" // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
+    func actionStartFirstSession() {
+        isSessionEverStarted = true
+        currentPrompt = Prompts.words.randomElement() ?? "inspiration"
+        appState.currentPromptForSaving = currentPrompt
+        timeRemaining = selectedDurationInSeconds
+        startActiveTimer()
+        saveStatusMessage = ""
     }
 
-    func actionPauseTimer() { // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-        stopActiveTimer() // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
+    func actionPauseTimer() {
+        stopActiveTimer()
+        editorHasFocus = false
+    }
+    func actionResumeTimer() {
+        startActiveTimer()
     }
 
-    func actionResumeTimer() { // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-        startActiveTimer() // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
+    func actionStartNewSprintWithNewPrompt(clearExistingText: Bool) {
+        isSessionEverStarted = true
+        currentPrompt = Prompts.words.randomElement() ?? "next chapter"
+        appState.currentPromptForSaving = currentPrompt
+        timeRemaining = selectedDurationInSeconds
+        if clearExistingText { appState.userText = "" }
+        appState.isWorkSaved = true
+        startActiveTimer()
+        saveStatusMessage = ""
     }
 
-    func actionStartNewSprintWithNewPrompt() { // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-        currentPrompt = Prompts.words.randomElement() ?? "next chapter" // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-        timeRemaining = selectedDurationInSeconds // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-        appState.userText = "" // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-        appState.isWorkSaved = true // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-        startActiveTimer() // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-        saveStatusMessage = "" // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
+    func actionResetApp(clearText: Bool) {
+        stopActiveTimer()
+        isSessionEverStarted = false
+        currentPrompt = ""
+        appState.currentPromptForSaving = ""
+        if clearText { appState.userText = "" }
+        appState.isWorkSaved = true
+        timeRemaining = selectedDurationInSeconds
+        saveStatusMessage = ""
+        showStartOverAlert = false
+        editorHasFocus = false
     }
 
-    func actionResetApp() { // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-        stopActiveTimer() // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-        isSessionEverStarted = false // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-        currentPrompt = "" // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-        appState.userText = "" // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-        appState.isWorkSaved = true // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-        timeRemaining = selectedDurationInSeconds // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-        saveStatusMessage = "" // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-    }
-
-    func startActiveTimer() { // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-        if isTimerActive { return } // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-        
-        isTimerActive = true // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-        print("ContentView: startActiveTimer - isTimerActive set to true.") // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-        
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-            print("ContentView: startActiveTimer (delayed) - Setting editorHasFocus = true") // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-            self.editorHasFocus = true // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
+    func startActiveTimer() {
+        if isTimerActive { return }
+        isTimerActive = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+            self.editorHasFocus = true
         }
-        
-        timer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { _ in // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-            if self.timeRemaining > 0 { // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-                self.timeRemaining -= 1 // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-            } else { // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-                self.stopActiveTimer() // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-                self.showPostTimerAlert = true // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
+        timer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { _ in
+            if self.timeRemaining > 0 {
+                self.timeRemaining -= 1
+            } else {
+                self.stopActiveTimer()
+                self.showPostTimerAlert = true
             }
         }
     }
 
-    func stopActiveTimer() { // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-        timer?.invalidate() // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-        timer = nil // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-        
-        let wasActive = isTimerActive // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-        
-        if wasActive { // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-            print("ContentView: stopActiveTimer - Setting editorHasFocus = false") // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-            self.editorHasFocus = false // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
+    func stopActiveTimer() {
+        timer?.invalidate()
+        timer = nil
+        isTimerActive = false
+        editorHasFocus = false
+    }
+
+    // MARK: - Alert Action Handlers
+    func alertActionKeepWritingSamePromptNewTimer() {
+        timeRemaining = selectedDurationInSeconds
+        startActiveTimer()
+        saveStatusMessage = ""
+    }
+
+    func alertActionNewPromptDiscardText() {
+        stopActiveTimer()
+        appState.userText = ""
+        appState.isWorkSaved = true
+        currentPrompt = Prompts.words.randomElement() ?? "fresh start"
+        appState.currentPromptForSaving = currentPrompt
+        timeRemaining = selectedDurationInSeconds
+        startActiveTimer()
+        isSessionEverStarted = true
+        saveStatusMessage = ""
+    }
+
+    // MARK: - Save Operation
+    func callAppendToWritingJournalAndContinue() {
+        if mandalaModeEnabled {
+            saveStatusMessage = "Mandala Mode: Saving is disabled."
+            return
         }
-        
-        isTimerActive = false // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-        print("ContentView: stopActiveTimer - isTimerActive set to false.") // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-    }
-
-    func alertActionKeepWritingSamePromptNewTimer() { // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-        timeRemaining = selectedDurationInSeconds // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-        startActiveTimer() // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-        saveStatusMessage = "" // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-    }
-
-    func alertActionNewPromptDiscardText() { // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-        stopActiveTimer() // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-        appState.userText = "" // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-        appState.isWorkSaved = true // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-        currentPrompt = Prompts.words.randomElement() ?? "fresh start" // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-        timeRemaining = selectedDurationInSeconds // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-        saveStatusMessage = "" // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-    }
-    
-    func generateFileName(forPrompt prompt: String, includeExtension: Bool = false) -> String { // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-        let defaults = UserDefaults.standard // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-        let useDefaultStructure = defaults.object(forKey: UserDefaultKeys.filenameUseDefaultStructure) as? Bool ?? true // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-        
-        var nameParts: [String] = [] // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-        let now = Date() // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-        
-        let promptSanitized = prompt.replacingOccurrences(of: "[^a-zA-Z0-9_]", with: "_", options: .regularExpression) // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-        let safePrompt = promptSanitized.isEmpty || promptSanitized == "_" ? "Writing" : promptSanitized // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-
-        if useDefaultStructure { // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-            let defaultFormatter = DateFormatter() // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-            defaultFormatter.dateFormat = "yyyy-MM-dd_HH-mm-ss" // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-            nameParts.append("Authorcise") // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-            nameParts.append(safePrompt) // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-            nameParts.append(defaultFormatter.string(from: now)) // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-        } else { // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-            let componentOrder: [FilenameComponent] // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-            if let data = defaults.data(forKey: UserDefaultKeys.filenameComponentOrder), // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-               let decodedOrder = try? JSONDecoder().decode([FilenameComponent].self, from: data) { // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-                componentOrder = decodedOrder // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-            } else { // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-                componentOrder = FilenameComponent.allCases // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-            }
-
-            let includePrefix = defaults.object(forKey: UserDefaultKeys.filenameIncludeAuthorcisePrefix) as? Bool ?? true // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-            let includePromptFlag = defaults.object(forKey: UserDefaultKeys.filenameIncludePrompt) as? Bool ?? true // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-            let includeDateFlag = defaults.object(forKey: UserDefaultKeys.filenameIncludeDate) as? Bool ?? true // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-            let includeTimeFlag = defaults.object(forKey: UserDefaultKeys.filenameIncludeTime) as? Bool ?? true // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-            let includeCustomPrefix = defaults.object(forKey: UserDefaultKeys.filenameIncludeCustomPrefix) as? Bool ?? false // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-            let customPrefixString = defaults.string(forKey: UserDefaultKeys.filenameCustomPrefixString) ?? "" // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-            
-            let safeCustomPrefix = customPrefixString // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-                .trimmingCharacters(in: .whitespacesAndNewlines) // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-                .replacingOccurrences(of: "[^a-zA-Z0-9_-]", with: "", options: .regularExpression) // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-
-            let dateFormatter = DateFormatter() // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-            var dateString = "" // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-            if includeDateFlag { // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-                dateFormatter.dateFormat = "yyyy-MM-dd" // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-                dateString = dateFormatter.string(from: now) // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-            }
-
-            let timeFormatter = DateFormatter() // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-            var timeString = "" // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-            if includeTimeFlag { // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-                timeFormatter.dateFormat = "HH-mm-ss" // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-                timeString = timeFormatter.string(from: now) // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-            }
-            
-            for component in componentOrder { // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-                switch component { // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-                case .authorcisePrefix: // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-                    if includePrefix { nameParts.append("Authorcise") } // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-                case .customPrefix: // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-                    if includeCustomPrefix && !safeCustomPrefix.isEmpty { nameParts.append(safeCustomPrefix) } // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-                case .prompt: // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-                    if includePromptFlag { nameParts.append(safePrompt) } // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-                case .date: // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-                    if includeDateFlag && !dateString.isEmpty { // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-                        nameParts.append(dateString) // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-                    }
-                case .time: // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-                    if includeTimeFlag && !timeString.isEmpty { // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-                        nameParts.append(timeString) // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
+        if isTimerActive { actionPauseTimer() }
+        guard !appState.userText.isEmpty else {
+            saveStatusMessage = "Nothing to save."
+            return
+        }
+        appendToWritingJournal(text: appState.userText, currentPrompt: self.currentPrompt) { result in
+            DispatchQueue.main.async {
+                switch result {
+                case .success(let path):
+                    self.saveStatusMessage = "Saved to: \(URL(fileURLWithPath: path).lastPathComponent)"
+                    appState.workSuccessfullySaved()
+                case .failure(let error):
+                    let nsError = error as NSError
+                    if nsError.domain == "AuthorciseApp.SaveOperation" && nsError.code == NSUserCancelledError {
+                        self.saveStatusMessage = "Save cancelled."
+                    } else {
+                        self.saveStatusMessage = "Save failed: \(error.localizedDescription.prefix(100))"
                     }
                 }
             }
         }
-        
-        let baseName = nameParts.filter { !$0.isEmpty }.joined(separator: "_") // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-        let finalBaseName = baseName.isEmpty ? "Authorcise_Save" : baseName // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-        return includeExtension ? finalBaseName + ".txt" : finalBaseName // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
     }
 
-    func callSaveTextFile() { // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-        if isTimerActive { // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-            actionPauseTimer() // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
+    func callAppendToWritingJournalThenReset() {
+        if mandalaModeEnabled {
+            saveStatusMessage = "Mandala Mode: Saving is disabled. Work will be discarded."
+            actionResetApp(clearText: true)
+            return
         }
-
-        let contentToSave = appState.userText // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-        let fileNameWithoutExtension = generateFileName(forPrompt: currentPrompt, includeExtension: false) // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-
-        saveTextFile(content: contentToSave, preferredFileName: fileNameWithoutExtension) { result in // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-            DispatchQueue.main.async { // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-                switch result { // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-                case .success(let path): // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-                    print("ContentView: Successfully saved to: \(path)") // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-                    self.saveStatusMessage = "Saved to: \(path.truncatingPath())" // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-                    appState.workSaved() // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-                case .failure(let error): // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-                    print("ContentView: Save failed: \(error.localizedDescription)") // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-                    let nsError = error as NSError // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-                    if nsError.domain == "AuthorciseApp.SaveOperation" && nsError.code == NSUserCancelledError { // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-                        self.saveStatusMessage = "" // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-                    } else if nsError.domain == NSCocoaErrorDomain && nsError.code == NSUserCancelledError { // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-                         self.saveStatusMessage = "" // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
+        if isTimerActive { actionPauseTimer() }
+        guard !appState.userText.isEmpty else {
+            actionResetApp(clearText: true)
+            return
+        }
+        appendToWritingJournal(text: appState.userText, currentPrompt: self.currentPrompt) { result in
+            DispatchQueue.main.async {
+                switch result {
+                case .success(let path):
+                    self.saveStatusMessage = "Saved to: \(URL(fileURLWithPath: path).lastPathComponent)"
+                    appState.workSuccessfullySaved()
+                    self.actionResetApp(clearText: true)
+                case .failure(let error):
+                    let nsError = error as NSError
+                    if nsError.domain == "AuthorciseApp.SaveOperation" && nsError.code == NSUserCancelledError {
+                        self.saveStatusMessage = "Save cancelled. Not starting over."
+                    } else {
+                        self.saveStatusMessage = "Save failed: \(error.localizedDescription.prefix(100)). Not starting over."
                     }
-                    else { // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-                        self.saveStatusMessage = "Save failed: \(error.localizedDescription)" // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-                    }
+                    self.showStartOverAlert = false
                 }
             }
         }
     }
     
-    private func handleFileExporterResult(_ result: Result<URL, Error>) { // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-         let wasQuitting = appState.isQuittingAfterSave // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-
-            switch result { // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-            case .success(let url): // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-                print("ContentView: .fileExporter saved to: \(url.path)") // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-                appState.workSaved() // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-                saveStatusMessage = "Saved to: \(url.path.truncatingPath())" // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-                if wasQuitting { // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-                     NSApplication.shared.terminate(nil) // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-                }
-            case .failure(let error): // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-                print("ContentView: .fileExporter save failed: \(error.localizedDescription)") // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-                let nsError = error as NSError // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-                if !(nsError.domain == "AuthorciseApp.SaveOperation" && nsError.code == NSUserCancelledError) && // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-                   !(nsError.domain == NSCocoaErrorDomain && nsError.code == NSUserCancelledError) { // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-                    saveStatusMessage = "Save failed: \(error.localizedDescription)" // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-                } else { // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-                    saveStatusMessage = "" // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-                }
-                 if wasQuitting { // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-                     print("ContentView: Save via .fileExporter failed during quit, cancelling termination.") // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-                     appState.cancelQuitAfterSaveAttempt() // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-                 }
+    // MARK: - Lifecycle and System Event Handlers
+    private func handleOnAppear() {
+         windowDelegate.appState = appState
+            if !isSessionEverStarted {
+                NotificationCenter.default.post(name: .writingSessionDidStop, object: nil)
+                AppState.isCurrentSessionActive = false
+                timeRemaining = selectedDurationInSeconds
+            } else {
+                NotificationCenter.default.post(name: .writingSessionDidStart, object: nil)
+                AppState.isCurrentSessionActive = true
             }
-             if appState.showFileExporter { // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-                 appState.showFileExporter = false // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-             }
-             if wasQuitting && !appState.showFileExporter { // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-                if appState.isQuittingAfterSave { // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-                    appState.isQuittingAfterSave = false // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-                }
-             }
-    }
-    
-    private func handleOnAppear() { // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-         windowDelegate.appState = appState // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-            if !isSessionEverStarted { // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-                timeRemaining = selectedDurationInSeconds // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-            }
-            NotificationCenter.default.addObserver(forName: .settingsWindowOpened, object: nil, queue: .main) { _ in // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-                if self.isTimerActive { // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-                    print("ContentView: Settings window opened, pausing timer.") // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-                    self.actionPauseTimer() // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
+            appState.currentPromptForSaving = currentPrompt
+            NotificationCenter.default.addObserver(forName: .settingsWindowOpened, object: nil, queue: .main) { _ in
+                if self.isTimerActive {
+                    self.actionPauseTimer()
                 }
             }
     }
     
-    func toggleAppearance() { // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-        isDarkModeEnabled.toggle() // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-        if !saveStatusMessage.starts(with: "Saved to:") { saveStatusMessage = "" } // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
+    func toggleAppearance() {
+        isDarkModeEnabled.toggle()
+        if !saveStatusMessage.starts(with: "Saved to:") && !saveStatusMessage.contains("Mandala") { saveStatusMessage = "" }
     }
 
-    func toggleFullscreen() { // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-        if let window = NSApp.keyWindow ?? NSApp.windows.first { // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-            window.toggleFullScreen(nil) // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-            forceViewUpdateForFullscreen.toggle() // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
+    func toggleFullscreen() {
+        if let window = NSApp.keyWindow ?? NSApp.windows.first {
+            window.toggleFullScreen(nil)
+            forceViewUpdateForFullscreen.toggle()
         }
-        if !saveStatusMessage.starts(with: "Saved to:") { saveStatusMessage = "" } // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-    }
-
-    func isFullscreen() -> Bool { // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-        guard let window = NSApp.keyWindow ?? NSApp.windows.first else { return false } // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-        return window.styleMask.contains(.fullScreen) // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
+        if !saveStatusMessage.starts(with: "Saved to:") && !saveStatusMessage.contains("Mandala") { saveStatusMessage = "" }
     }
 }
-// --- END OF CONTENTVIEW STRUCT ---
 
-// --- ENSURE THIS EXTENSION IS DEFINED ONLY ONCE (IF NOT ALREADY PART OF ANOTHER FILE) ---
-// Helper extension to truncate file paths for display (moved here for clarity if it was duplicated)
+// String extension for truncating path
 extension String {
-    func truncatingPath(maxLength: Int = 50) -> String { // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-        if self.count > maxLength { // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-            return "..." + self.suffix(maxLength - 3) // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
+    func truncatingPath(maxLength: Int = 50) -> String {
+        if self.count > maxLength {
+            return "..." + self.suffix(maxLength - 3)
         }
-        return self // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
+        return self
     }
 }
-// --- END OF STRING EXTENSION ---
 
-// Preview provider needs EnvironmentObject
-// --- ENSURE THIS STRUCT IS DEFINED ONLY ONCE ---
 struct ContentView_Previews: PreviewProvider {
     static var previews: some View {
-        let appState = AppState() // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-
-        ContentView() // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-            .environmentObject(appState) // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-            .environment(\.colorScheme, .light) // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-            .previewDisplayName("Light Mode") // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-
-        ContentView() // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-            .environmentObject(appState) // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-            .environment(\.colorScheme, .dark) // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-            .previewDisplayName("Dark Mode") // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-
-        ContentView() // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-            .environmentObject(appState) // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-            .environment(\.colorScheme, .light) // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-            .onAppear { // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-                UserDefaults.standard.set(true, forKey: UserDefaultKeys.typewriterModeEnabled) // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-            }
-            .previewDisplayName("Typewriter ON (Light)") // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-        
-        ContentView() // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-            .environmentObject(appState) // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-            .environment(\.colorScheme, .dark) // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-            .onAppear { // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-                UserDefaults.standard.set(true, forKey: UserDefaultKeys.typewriterModeEnabled) // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
-            }
-            .previewDisplayName("Typewriter ON - Session (Dark)") // [cite: colinwright/authorcise/Authorcise-23b3fce9bc82b08a123cdf6efd47070eca407d4d/Authorcise/ContentView.swift]
+        let appState = AppState()
+        ContentView()
+            .environmentObject(appState)
+            .environment(\.colorScheme, .light)
+            .previewDisplayName("Light Mode")
+        ContentView()
+            .environmentObject(appState)
+            .environment(\.colorScheme, .dark)
+            .previewDisplayName("Dark Mode")
     }
 }
-// --- END OF CONTENTVIEW_PREVIEWS STRUCT ---
